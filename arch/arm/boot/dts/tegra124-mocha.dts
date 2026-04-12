@@ -39,7 +39,7 @@
 	};
 
 	chosen {
-		bootargs = "tegraid=40.0.0.00.00 vmalloc=400M video=tegrafb console=ttyS0,115200n8 earlyprintk loglevel=8";
+		bootargs = "tegraid=40.0.0.00.00 vmalloc=400M video=tegrafb console=ttyS0,115200n8 earlyprintk loglevel=8 console=tty0 androidboot.fstab_name=tn8";
 		/* linux,initrd-start = <0x85000000>; */
 		/* linux,initrd-end = <0x851bc400>; */
 	};
