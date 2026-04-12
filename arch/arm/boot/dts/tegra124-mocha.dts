@@ -23,8 +23,23 @@
 	#address-cells = <2>;
 	#size-cells = <2>;
 
+	reserved-memory {
+		#address-cells = <2>;
+		#size-cells = <2>;
+		ranges;
+
+		ramoops@fff00000 {
+			compatible = "ramoops";
+			reg = <0x0 0xfff00000 0x0 0x00100000>;
+			record-size = <0x00040000>;
+			console-size = <0x00040000>;
+			ftrace-size = <0x00040000>;
+			pmsg-size = <0x00040000>;
+		};
+	};
+
 	chosen {
-		bootargs = "tegraid=40.0.0.00.00 vmalloc=400M video=tegrafb console=ttyS0,115200n8 earlyprintk";
+		bootargs = "tegraid=40.0.0.00.00 vmalloc=400M video=tegrafb console=ttyS0,115200n8 earlyprintk loglevel=8";
 		/* linux,initrd-start = <0x85000000>; */
 		/* linux,initrd-end = <0x851bc400>; */
 	};
