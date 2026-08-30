@@ -152,7 +152,7 @@
 			consumers {
 				c1 {
 					regulator-consumer-supply = "ldoen";
-					regulator-consumer-device = "tegra-snd-rt5639";
+					regulator-consumer-device = "tegra-snd-rt5671";
 				};
 			};
 		};

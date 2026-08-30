@@ -271,27 +271,15 @@
 						consumers {
 							c1 {
 								regulator-consumer-supply = "dbvdd";
-								regulator-consumer-device = "tegra-snd-rt5639.0";
+								regulator-consumer-device = "tegra-snd-rt5671.0";
 							};
 							c2 {
-								regulator-consumer-supply = "dbvdd";
-								regulator-consumer-device = "tegra-snd-rt5645.0";
+								regulator-consumer-supply = "avdd";
+								regulator-consumer-device = "tegra-snd-rt5671.0";
 							};
 							c3 {
-								regulator-consumer-supply = "avdd";
-								regulator-consumer-device = "tegra-snd-rt5639.0";
-							};
-							c4 {
-								regulator-consumer-supply = "avdd";
-								regulator-consumer-device = "tegra-snd-rt5645.0";
-							};
-							c5 {
 								regulator-consumer-supply = "dmicvdd";
-								regulator-consumer-device = "tegra-snd-rt5639.0";
-							};
-							c6 {
-								regulator-consumer-supply = "dmicvdd";
-								regulator-consumer-device = "tegra-snd-rt5645.0";
+								regulator-consumer-device = "tegra-snd-rt5671.0";
 							};
 							c7 {
 								regulator-consumer-supply = "avdd_osc";
@@ -514,7 +502,7 @@
 						};
 					};
 
-					ldo2 {
+					palmas_ldo2: ldo2 {
 						regulator-name = "vdd-lcd-io";
 						regulator-min-microvolt = <1800000>;
 						regulator-max-microvolt = <1800000>;
@@ -572,7 +560,7 @@
 						};
 					};
 
-					ldo4 {
+					palmas_ldo4: ldo4 {
 						regulator-name = "avdd-cam";
 						regulator-min-microvolt = <2700000>;
 						regulator-max-microvolt = <2700000>;
@@ -657,7 +645,7 @@
 						};
 					};
 
-					ldo6 {
+					palmas_ldo6: ldo6 {
 						regulator-name = "vdd-cam-af";
 						regulator-min-microvolt = <1800000>;
 						regulator-max-microvolt = <1800000>;
@@ -706,7 +694,7 @@
 						};
 					};
 
-					ldo7 {
+					palmas_ldo7: ldo7 {
 						regulator-name = "avdd-cam-af";
 						regulator-min-microvolt = <2700000>;
 						regulator-max-microvolt = <2700000>;
