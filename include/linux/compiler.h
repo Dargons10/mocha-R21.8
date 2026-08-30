@@ -3,6 +3,11 @@
 
 #ifndef __ASSEMBLY__
 
+/* Define __COUNTER__ if not available - for GCC >= 4.3 */
+#ifndef __COUNTER__
+#define __COUNTER__ __LINE__
+#endif
+
 #ifdef __CHECKER__
 # define __user		__attribute__((noderef, address_space(1)))
 # define __kernel	__attribute__((address_space(0)))
