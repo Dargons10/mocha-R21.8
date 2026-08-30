@@ -52,9 +52,7 @@
 #define DAI_LINK_HIFI		0
 #define DAI_LINK_LEFT_SPK	1
 #define DAI_LINK_RIGHT_SPK	2
-#define DAI_LINK_BTSCO		3
-#define DAI_LINK_FM		4
-#define NUM_DAI_LINKS		5
+#define NUM_DAI_LINKS		3
 
 const char *tegra_rt5671_i2s_dai_name[TEGRA30_NR_I2S_IFC] = {
 	"tegra30-i2s.0",
@@ -469,23 +467,7 @@ static const struct snd_soc_pcm_stream tegra_rt5671_spk_params = {
 
 };
 
-static const struct snd_soc_pcm_stream tegra_rt5671_bt_params = {
-	.formats = SNDRV_PCM_FMTBIT_S16_LE,
-	.rate_min = 8000,
-	.rate_max = 8000,
-	.channels_min = 1,
-	.channels_max = 1,
 
-};
-
-static const struct snd_soc_pcm_stream tegra_rt5671_fm_params = {
-	.formats = SNDRV_PCM_FMTBIT_S16_LE,
-	.rate_min = 48000,
-	.rate_max = 48000,
-	.channels_min = 2,
-	.channels_max = 2,
-
-};
 
 static struct snd_soc_dai_link tegra_rt5671_dai[NUM_DAI_LINKS] = {
 	[DAI_LINK_HIFI] = {
@@ -521,29 +503,7 @@ static struct snd_soc_dai_link tegra_rt5671_dai[NUM_DAI_LINKS] = {
 		.params = &tegra_rt5671_spk_params,
 		.ignore_pmdown_time = 1,
 	},
-	[DAI_LINK_BTSCO] = {
-		.name = "BT-SCO",
-		.stream_name = "BT SCO PCM",
-		.codec_name = "rt5671.0-001c",
-		.cpu_name = "spdif-dit.1",
-		.codec_dai_name = "rt5671-aif3",
-		.dai_fmt = SND_SOC_DAIFMT_DSP_A | SND_SOC_DAIFMT_IB_NF |
-				SND_SOC_DAIFMT_CBM_CFM,
-		.params = &tegra_rt5671_bt_params,
-		.ignore_pmdown_time = 1,
-	},
 
-	[DAI_LINK_FM] = {
-		.name = "rt5671 FM",
-		.stream_name = "rt5671 FM",
-		.codec_name = "rt5671.0-001c",
-		.cpu_name = "spdif-dit.3",
-		.codec_dai_name = "rt5671-aif4",
-		.dai_fmt = SND_SOC_DAIFMT_I2S | SND_SOC_DAIFMT_NB_NF |
-				SND_SOC_DAIFMT_CBM_CFM,
-		.params = &tegra_rt5671_fm_params,
-		.ignore_pmdown_time = 1,
-	},
 };
 
 static int tegra_rt5671_suspend_post(struct snd_soc_card *card)
@@ -642,14 +602,7 @@ static struct snd_soc_codec_conf tegra_rt5671_conf[] = {
 		.dev_name = "tfa98xx.0-0037",
 		.name_prefix = "Right Spk",
 	},
-	{
-		.dev_name = "spdif-dit.1",
-		.name_prefix = "BT",
-	},
-	{
-		.dev_name = "spdif-dit.3",
-		.name_prefix = "FM",
-	},
+
 };
 
 static struct snd_soc_card snd_soc_tegra_rt5671 = {
