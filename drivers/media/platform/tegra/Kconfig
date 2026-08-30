@@ -250,3 +250,20 @@ config VIDEO_CAMERA
         ---help---
           This is a driver for generic camera devices
           for use with the tegra isp.
+
+config VIDEO_MOCHA_V4L2
+	tristate "Mocha V4L2 capture driver"
+	depends on I2C && ARCH_TEGRA && VIDEO_DEV
+	---help---
+	  This is a V4L2 capture driver for Xiaomi Mi Pad (mocha)
+	  supporting IMX179 rear camera and OV5693 front camera.
+
+config CAMERA_COMMON
+	tristate "Tegra camera common infrastructure"
+	depends on I2C && ARCH_TEGRA
+	---help---
+	  This provides common camera infrastructure for Tegra
+	  platforms including media controller support.
+
+# V4L2 subdev drivers for modern camera pipeline
+source "drivers/media/platform/tegra/v4l2/Kconfig"

@@ -1,0 +1,56 @@
+#
+# NVIDIA Tegra V4L2 Camera Drivers
+#
+
+menu "NVIDIA Tegra V4L2 Camera Drivers"
+
+config VIDEO_TEGRA_VI_V4L2
+    tristate "Tegra Video Input (VI) V4L2 driver"
+    depends on VIDEO_V4L2 && ARCH_TEGRA && I2C
+    select VIDEOBUF2_DMA_SG
+    select VIDEOBUF2_VMALLOC
+    select MEDIA_CONTROLLER
+    select VIDEO_V4L2_SUBDEV_API
+    ---help---
+      This is the V4L2 driver for Tegra Video Input (VI) hardware.
+      It provides a standard V4L2 interface for capturing video from
+      MIPI CSI-2 sensors connected to the Tegra K1.
+
+config VIDEO_TEGRA_CSI
+    bool "Tegra CSI receiver support"
+    depends on VIDEO_TEGRA_VI_V4L2
+    default y
+    ---help---
+      Support for Tegra CSI-2 receiver hardware.
+      Required for VI driver to function.
+
+config VIDEO_IMX179_V4L2
+    tristate "Sony IMX179 sensor V4L2 subdev driver"
+    depends on VIDEO_V4L2 && I2C
+    select MEDIA_CONTROLLER
+    select VIDEO_V4L2_SUBDEV_API
+    ---help---
+      V4L2 subdev driver for Sony IMX179 CMOS image sensor.
+      Used in Xiaomi Mi Pad (mocha) rear camera.
+      8MP sensor with RGGB Bayer pattern on CSI-A 4-lane.
+
+config VIDEO_OV5693_V4L2
+    tristate "OmniVision OV5693 sensor V4L2 subdev driver"
+    depends on VIDEO_V4L2 && I2C
+    select MEDIA_CONTROLLER
+    select VIDEO_V4L2_SUBDEV_API
+    ---help---
+      V4L2 subdev driver for OmniVision OV5693 CMOS image sensor.
+      Used in Xiaomi Mi Pad (mocha) front camera.
+      5MP sensor with BGGR Bayer pattern on CSI-E 1-lane.
+
+config VIDEO_AD5823_V4L2
+    tristate "AD5823 VCM focuser V4L2 subdev driver"
+    depends on VIDEO_V4L2 && I2C
+    select MEDIA_CONTROLLER
+    select VIDEO_V4L2_SUBDEV_API
+    ---help---
+      V4L2 subdev driver for AD5823 Voice Coil Motor (VCM) focuser.
+      Used with IMX179 rear camera for autofocus.
+
+endmenu

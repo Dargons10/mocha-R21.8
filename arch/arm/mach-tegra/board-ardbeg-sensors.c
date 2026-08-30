@@ -52,6 +52,8 @@ static struct i2c_board_info ardbeg_i2c_board_info_cm32181[] = {
 };
 #endif
 
+/* Legacy camera platform data - disabled, using Device Tree instead */
+#if 0
 static struct regulator *ov5693_1v2;
 static struct regulator *ov5693_1v8;
 static struct regulator *ov5693_afvdd;
@@ -402,6 +404,31 @@ static int ardbeg_camera_init(void)
 	tegra_io_dpd_enable(&csie_io);
 
 	return 0;
+}
+#endif /* Legacy camera platform data disabled - using Device Tree */
+
+/* Stub camera init - Device Tree handles sensor registration */
+static int ardbeg_camera_init(void)
+{
+	pr_info("%s: Camera init via Device Tree (legacy disabled)\n", __func__);
+	return 0;
+}
+
+/* Camera auxdata stub - required for Device Tree camera support */
+static struct camera_data_blob ardbeg_camera_lut_stub[] = {
+	{},
+};
+
+void __init ardbeg_camera_auxdata(void *data)
+{
+	struct of_dev_auxdata *aux_lut = data;
+	while (aux_lut && aux_lut->compatible) {
+		if (!strcmp(aux_lut->compatible, "nvidia,tegra124-camera")) {
+			pr_info("%s: update camera lookup table.\n", __func__);
+			aux_lut->platform_data = ardbeg_camera_lut_stub;
+		}
+		aux_lut++;
+	}
 }
 
 static struct pid_thermal_gov_params cpu_pid_params = {

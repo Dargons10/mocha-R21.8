@@ -93,4 +93,20 @@ void media_device_unregister_entity(struct media_entity *entity);
 #define media_device_for_each_entity(entity, mdev)			\
 	list_for_each_entry(entity, &(mdev)->entities, list)
 
+/* Media Controller functions for kernel 3.10 */
+void media_device_init(struct media_device *mdev);
+void media_device_cleanup(struct media_device *mdev);
+int media_create_pad_link(struct media_entity *source, u16 source_pad,
+			 struct media_entity *sink, u16 sink_pad, u32 flags);
+int media_device_register_entity_links(struct media_device *mdev,
+				       const struct media_link *links,
+				       unsigned int num_links);
+
+/* Media entity types for kernel 3.10 */
+#define MEDIA_ENT_TYPE_DEV_ATOM	(1 << 8)
+#define MEDIA_ENT_TYPE_V4L2		(2 << 8)
+#define MEDIA_ENT_TYPE_V4L_SUBDEV	(3 << 8)
+#define MEDIA_ENT_FL_SINK		(1 << 0)
+#define MEDIA_ENT_FL_SOURCE		(1 << 1)
+
 #endif
