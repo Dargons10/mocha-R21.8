@@ -184,7 +184,6 @@ struct tegra_dc_ext_flip_3 {
 	__u16 reserved2; /* unused - must be 0 */
 	__s32 post_syncpt_fd;
 	__u16 dirty_rect[4]; /* x,y,w,h for partial screen update. 0 ignores */
-	__u32 flags;
 };
 
 /*
