@@ -184,6 +184,7 @@ struct tegra_dc_ext_flip_3 {
 	__u16 reserved2; /* unused - must be 0 */
 	__s32 post_syncpt_fd;
 	__u16 dirty_rect[4]; /* x,y,w,h for partial screen update. 0 ignores */
+	__u32 flags;
 };
 
 /*
@@ -433,6 +434,15 @@ struct tegra_dc_ext_feature {
 #define TEGRA_DC_EXT_FLIP3 \
 	_IOWR('D', 0x14, struct tegra_dc_ext_flip_3)
 
+#define TEGRA_DC_EXT_SET_VBLANK \
+	_IOW('D', 0x15, struct tegra_dc_ext_set_vblank)
+
+#define TEGRA_DC_EXT_SET_PROPOSED_BW_3 \
+	_IOR('D', 0x16, struct tegra_dc_ext_flip_3)
+
+#define TEGRA_DC_EXT_SET_CMU_ALIGNED \
+	_IOW('D', 0x17, struct tegra_dc_ext_cmu)
+
 enum tegra_dc_ext_control_output_type {
 	TEGRA_DC_EXT_DSI,
 	TEGRA_DC_EXT_LVDS,
@@ -486,6 +496,17 @@ struct tegra_dc_ext_event {
 #define TEGRA_DC_EXT_EVENT_HOTPLUG	0x1
 struct tegra_dc_ext_control_event_hotplug {
 	__u32 handle;
+	__u32 connected;
+};
+
+#define TEGRA_DC_EXT_EVENT_VBLANK	0x2
+struct tegra_dc_ext_control_event_vblank {
+	__u32 handle;
+	__u64 timestamp_ns;
+};
+
+struct tegra_dc_ext_set_vblank {
+	__u32 enable;
 };
 
 #define TEGRA_DC_EXT_EVENT_BANDWIDTH_INC	0x3
