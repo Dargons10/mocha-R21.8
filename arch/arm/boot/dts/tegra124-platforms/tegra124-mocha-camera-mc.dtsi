@@ -126,42 +126,22 @@
             };
         };
 
-        /* ISP-A: paired with IMX179 rear camera */
+        /* ISP-A: paired with IMX179 rear camera (disabled por override en mocha.dts) */
         isp@54600000 {
             compatible = "nvidia,tegra124-isp";
             status = "okay";
             reg = <0x54600000 0x00040000>;
             interrupts = <0 71 0x04>;
             nvidia,memory-clients = <8 29>;
-            ports {
-                #address-cells = <1>;
-                #size-cells = <0>;
-                port@0 {
-                    reg = <0>;
-                    mocha_isp_a_out0: endpoint {
-                        remote-endpoint = <&mocha_vi_in0>;
-                    };
-                };
-            };
         };
 
-        /* ISP-B: paired with OV5693 front camera */
+        /* ISP-B: paired with OV5693 front camera (disabled por override en mocha.dts) */
         isp@54680000 {
             compatible = "nvidia,tegra124-isp";
             status = "okay";
             reg = <0x54680000 0x00040000>;
             interrupts = <0 72 0x04>;
             nvidia,memory-clients = <8 29>;
-            ports {
-                #address-cells = <1>;
-                #size-cells = <0>;
-                port@0 {
-                    reg = <0>;
-                    mocha_isp_b_out0: endpoint {
-                        remote-endpoint = <&mocha_vi_in1>;
-                    };
-                };
-            };
         };
     };
 
@@ -183,12 +163,6 @@
             physical_h = "2.738";
             sensor_model = "imx179";
 
-            /* Clock */
-            clocks = <&tegra_car 96>;
-            clock-names = "mclk";
-            assigned-clocks = <&tegra_car 96>;
-            assigned-clock-rates = <24000000>;
-
             /* GPIOs */
             reset-gpios = <&gpio TEGRA_GPIO(BB, 3) GPIO_ACTIVE_HIGH>;
             af-gpios = <&gpio TEGRA_GPIO(BB, 7) GPIO_ACTIVE_HIGH>;
@@ -197,6 +171,9 @@
             vana-supply = <&palmas_ldo4>;
             vdig-supply = <&palmas_ldo2>;
             vif-supply = <&palmas_ldo6>;
+            reg1-supply = <&palmas_ldo7>;
+            cam1v2-supply = <&vdd_cam_1v2>;
+            cam1v8-supply = <&vdd_cam_1v8>;
             /* PBB5 (pwdn-gpios in earlier DT) is NOT connected in hardware */
 
             /* CSI configuration */
@@ -240,12 +217,6 @@
             physical_h = "2.738";
             sensor_model = "ov5693";
 
-            /* Clock */
-            clocks = <&tegra_car 97>;
-            clock-names = "mclk";
-            assigned-clocks = <&tegra_car 97>;
-            assigned-clock-rates = <24000000>;
-
             /* GPIOs */
             reset-gpios = <&gpio TEGRA_GPIO(CC, 1) GPIO_ACTIVE_HIGH>;
             pwdn-gpios = <&gpio TEGRA_GPIO(BB, 6) GPIO_ACTIVE_HIGH>;
@@ -254,6 +225,7 @@
             avdd-supply = <&palmas_ldo4>;
             dovdd-supply = <&palmas_ldo6>;
             dvdd-supply = <&palmas_ldo2>;
+            cam1v8-supply = <&vdd_cam_1v8>;
 
             /* CSI configuration */
             csi-port = <1>;

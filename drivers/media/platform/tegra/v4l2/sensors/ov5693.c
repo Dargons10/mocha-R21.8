@@ -645,7 +645,7 @@ static int ov5693_parse_dt(struct ov5693 *ov5693)
     if (IS_ERR(ov5693->dvdd))
         return PTR_ERR(ov5693->dvdd);
 
-    /* Global regulators (NOT mapped via DT supply-name - use NULL for global lookup) */
+    /* Global regulators: reg_af/reg_1v2 por nombre global; reg_1v8 via DT cam1v8-supply */
     ov5693->reg_af = regulator_get(NULL, "imx179_reg1");
     if (IS_ERR(ov5693->reg_af)) {
         pr_err("Cannot get regulator imx179_reg1: %ld\n", PTR_ERR(ov5693->reg_af));
@@ -658,9 +658,9 @@ static int ov5693_parse_dt(struct ov5693 *ov5693)
         return PTR_ERR(ov5693->reg_1v2);
     }
 
-    ov5693->reg_1v8 = regulator_get(NULL, "vdd_cam_1v8");
+    ov5693->reg_1v8 = devm_regulator_get(dev, "cam1v8");
     if (IS_ERR(ov5693->reg_1v8)) {
-        pr_err("Cannot get regulator vdd_cam_1v8: %ld\n", PTR_ERR(ov5693->reg_1v8));
+        pr_err("Cannot get regulator cam1v8: %ld\n", PTR_ERR(ov5693->reg_1v8));
         return PTR_ERR(ov5693->reg_1v8);
     }
 
@@ -789,7 +789,6 @@ static int ov5693_remove(struct i2c_client *client)
     if (ov5693->powered)
         ov5693_set_power(ov5693, false);
 
-    regulator_put(ov5693->reg_1v8);
     regulator_put(ov5693->reg_1v2);
     regulator_put(ov5693->reg_af);
 

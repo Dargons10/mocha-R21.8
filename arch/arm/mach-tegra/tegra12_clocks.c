@@ -8648,6 +8648,9 @@ struct clk_duplicate tegra_clk_duplicates[] = {
 	CLK_DUPLICATE("dam2", NULL, "dam2"),
 	CLK_DUPLICATE("spdif_in", NULL, "spdif_in"),
 	CLK_DUPLICATE("mclk", NULL, "default_mclk"),
+	/* MCLK para sensores DT-probed (i2c client names en bus 2) */
+	CLK_DUPLICATE("mclk",  "2-0010", "mclk"),   /* IMX179  -> vi_sensor  (PCC0) */
+	CLK_DUPLICATE("mclk2", "2-0036", "mclk"),   /* OV5693  -> vi_sensor2 (PBB0) */
 	CLK_DUPLICATE("amx", NULL, "amx"),
 	CLK_DUPLICATE("amx1", NULL, "amx1"),
 	CLK_DUPLICATE("adx", NULL, "adx"),

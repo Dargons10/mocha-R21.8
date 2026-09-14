@@ -25,6 +25,8 @@
 #include <linux/of_gpio.h>
 #include <linux/slab.h>
 
+#include <mach/io_dpd.h>
+
 #include <media/v4l2-subdev.h>
 #include <media/v4l2-ctrls.h>
 #include "../tegra_vi.h"
@@ -328,6 +330,18 @@ static int imx179_check_chip_id(struct imx179 *imx179)
     return -ENODEV;
 }
 
+/* CSI-A/B IO DPD (mismos bits que board-ardbeg-sensors.c:95-105) */
+static struct tegra_io_dpd csia_io = {
+    .name           = "CSIA",
+    .io_dpd_reg_index = 0,
+    .io_dpd_bit    = 0,
+};
+static struct tegra_io_dpd csib_io = {
+    .name           = "CSIB",
+    .io_dpd_reg_index = 0,
+    .io_dpd_bit    = 1,
+};
+
 /* Power management - matching board-ardbeg-sensors.c:ardbeg_imx179_power_on */
 static int imx179_set_power(struct imx179 *imx179, bool on)
 {
@@ -347,6 +361,10 @@ static int imx179_set_power(struct imx179 *imx179, bool on)
             return ret;
         }
 
+        /* [stock] Desactivar IO DPD de CSI-A/B (sin esto, MIPI muerto) */
+        tegra_io_dpd_disable(&csia_io);
+        tegra_io_dpd_disable(&csib_io);
+
         /* [NVC driver order] GPIOs first, sensor in reset */
         if (gpio_is_valid(imx179->reset_gpio))
             gpio_set_value(imx179->reset_gpio, 0);   /* RSTN LOW (assert reset) */
@@ -356,7 +374,13 @@ static int imx179_set_power(struct imx179 *imx179, bool on)
 
         /* Luego reguladores (avdd + iovdd, igual que stock imx179_power_on) */
         ret = regulator_enable(imx179->reg1);
-        if (ret) { pr_err("Failed reg1: %d\n", ret); return ret; }
+        if (ret) {
+            pr_err("Failed reg1: %d\n", ret);
+            tegra_io_dpd_enable(&csia_io);
+            tegra_io_dpd_enable(&csib_io);
+            clk_disable_unprepare(imx179->mclk);
+            return ret;
+        }
         ret = regulator_enable(imx179->reg_1v2);
         if (ret) { pr_err("Failed 1v2: %d\n", ret); goto err_1v2; }
         ret = regulator_enable(imx179->reg_1v8);
@@ -404,6 +428,8 @@ err_1v8:
         regulator_disable(imx179->reg_1v2);
 err_1v2:
         regulator_disable(imx179->reg1);
+        tegra_io_dpd_enable(&csia_io);
+        tegra_io_dpd_enable(&csib_io);
         clk_disable_unprepare(imx179->mclk);
         return ret;
     } else if (!on && imx179->powered) {
@@ -415,6 +441,8 @@ err_1v2:
             gpio_set_value(imx179->af_gpio, 0);
         usleep_range(1, 2);
 
+        tegra_io_dpd_enable(&csia_io);
+        tegra_io_dpd_enable(&csib_io);
         clk_disable_unprepare(imx179->mclk);
         regulator_disable(imx179->vif);
         regulator_disable(imx179->vdig);
@@ -803,22 +831,22 @@ static int imx179_parse_dt(struct imx179 *imx179)
     if (IS_ERR(imx179->vif))
         return PTR_ERR(imx179->vif);
 
-    /* Global regulators (NOT mapped via DT supply-name - use NULL for global lookup) */
-    imx179->reg1 = regulator_get(NULL, "imx179_reg1");
+    /* Global regulators via DT supply-name (reg1/cam1v2/cam1v8-supply) */
+    imx179->reg1 = devm_regulator_get(dev, "reg1");
     if (IS_ERR(imx179->reg1)) {
-        pr_err("Cannot get regulator imx179_reg1: %ld\n", PTR_ERR(imx179->reg1));
+        pr_err("Cannot get regulator reg1: %ld\n", PTR_ERR(imx179->reg1));
         return PTR_ERR(imx179->reg1);
     }
 
-    imx179->reg_1v2 = regulator_get(NULL, "vdd_cam_1v2");
+    imx179->reg_1v2 = devm_regulator_get(dev, "cam1v2");
     if (IS_ERR(imx179->reg_1v2)) {
-        pr_err("Cannot get regulator vdd_cam_1v2: %ld\n", PTR_ERR(imx179->reg_1v2));
+        pr_err("Cannot get regulator cam1v2: %ld\n", PTR_ERR(imx179->reg_1v2));
         return PTR_ERR(imx179->reg_1v2);
     }
 
-    imx179->reg_1v8 = regulator_get(NULL, "vdd_cam_1v8");
+    imx179->reg_1v8 = devm_regulator_get(dev, "cam1v8");
     if (IS_ERR(imx179->reg_1v8)) {
-        pr_err("Cannot get regulator vdd_cam_1v8: %ld\n", PTR_ERR(imx179->reg_1v8));
+        pr_err("Cannot get regulator cam1v8: %ld\n", PTR_ERR(imx179->reg_1v8));
         return PTR_ERR(imx179->reg_1v8);
     }
 
@@ -934,10 +962,6 @@ static int imx179_remove(struct i2c_client *client)
 
     if (imx179->powered)
         imx179_set_power(imx179, false);
-
-    regulator_put(imx179->reg_1v8);
-    regulator_put(imx179->reg_1v2);
-    regulator_put(imx179->reg1);
 
     v4l2_ctrl_handler_free(&imx179->ctrl_handler);
     media_entity_cleanup(&imx179->sd.entity);
