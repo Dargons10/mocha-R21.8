@@ -30,11 +30,19 @@
 #include "../tegra_vi.h"
 #include <media/v4l2-of.h>
 
-/* AD5823 does not respond on I2C — no AD5823 chip on this hardware.
- * Focus position is stored but not written to HW.
- * GPIO 223 (CAM_AF_PWDN) is managed by IMX179 driver.
- * Regulators are shared with IMX179.
+/* The chip only answers on I2C while its VIN rail is up (shared with
+ * IMX179 power sequence) — it NACKs at cold boot probe. Register map
+ * verified against the working ad5823_mocha driver (Smoke Team) and the
+ * AD5823 datasheet; GPIO 223 (CAM_AF_PWDN) is managed by IMX179 driver.
  */
+
+#define AD5823_REG_RESET        0x01
+#define AD5823_REG_MODE         0x02
+#define AD5823_REG_MOVE_TIME    0x03
+#define AD5823_REG_CODE_MSB     0x04
+#define AD5823_REG_CODE_LSB     0x05
+#define AD5823_MOVE_TIME_VALUE  0x43
+#define AD5823_RING_CTRL        (1 << 2)
 
 #define AD5823_FOCUS_MIN        0
 #define AD5823_FOCUS_MAX        1023
@@ -59,10 +67,47 @@ static inline struct ad5823 *to_ad5823(struct v4l2_subdev *sd)
     return container_of(sd, struct ad5823, sd);
 }
 
+static int ad5823_write_reg(struct ad5823 *ad5823, u8 reg, u8 val)
+{
+    struct i2c_client *client = v4l2_get_subdevdata(&ad5823->sd);
+    return i2c_smbus_write_byte_data(client, reg, val);
+}
+
+static int ad5823_hw_init(struct ad5823 *ad5823)
+{
+    int err;
+
+    err = ad5823_write_reg(ad5823, AD5823_REG_RESET, 0x01);
+    if (err)
+        return err;
+    usleep_range(300, 500);
+    err = ad5823_write_reg(ad5823, AD5823_REG_MODE, 0x00);
+    if (err)
+        return err;
+    return ad5823_write_reg(ad5823, AD5823_REG_MOVE_TIME,
+                            AD5823_MOVE_TIME_VALUE);
+}
+
 static int ad5823_set_focus(struct ad5823 *ad5823, u16 position)
 {
+    int ret = 0;
+
+    if (position > AD5823_FOCUS_MAX)
+        position = AD5823_FOCUS_MAX;
+
     ad5823->current_focus = position;
-    return 0;
+    if (!ad5823->powered)
+        return 0; /* applied on next s_power(1) */
+
+    ret  = ad5823_write_reg(ad5823, AD5823_REG_MOVE_TIME,
+                            AD5823_MOVE_TIME_VALUE);
+    ret |= ad5823_write_reg(ad5823, AD5823_REG_MODE, 0x00);
+    ret |= ad5823_write_reg(ad5823, AD5823_REG_CODE_MSB,
+                            ((position >> 8) & 0x3) | AD5823_RING_CTRL);
+    ret |= ad5823_write_reg(ad5823, AD5823_REG_CODE_LSB, position & 0xFF);
+    if (ret)
+        pr_warn("focus position %d write failed: %d\n", position, ret);
+    return ret;
 }
 
 static int ad5823_s_power(struct v4l2_subdev *sd, int on)
@@ -90,6 +135,14 @@ static int ad5823_s_power(struct v4l2_subdev *sd, int on)
         }
 
         ad5823->powered = true;
+        ret = ad5823_hw_init(ad5823);
+        if (ret) {
+            pr_err("focuser hw init failed: %d (chip unpowered or absent?)\n",
+                   ret);
+            ad5823->powered = false;
+            return ret;
+        }
+        pr_info("focuser powered on, hw init ok\n");
         ad5823_set_focus(ad5823, ad5823->current_focus);
     } else {
         if (!ad5823->powered)
