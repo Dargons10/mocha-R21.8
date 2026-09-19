@@ -32,7 +32,7 @@ endef
 # We use internal kbuild rules to avoid the "is up to date" message from make
 scripts/mod/devicetable-offsets.s: scripts/mod/devicetable-offsets.c FORCE
 	$(Q)mkdir -p $(dir $@)
-	$(call if_changed_dep,cc_s_c)
+	$(call if_changed_dep,gcc_s_c)
 
 $(obj)/$(devicetable-offsets-file): scripts/mod/devicetable-offsets.s
 	$(call cmd,offsets)

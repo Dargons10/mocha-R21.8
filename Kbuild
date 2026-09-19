@@ -33,7 +33,7 @@ endef
 # We use internal kbuild rules to avoid the "is up to date" message from make
 kernel/bounds.s: kernel/bounds.c FORCE
 	$(Q)mkdir -p $(dir $@)
-	$(call if_changed_dep,cc_s_c)
+	$(call if_changed_dep,gcc_s_c)
 
 $(obj)/$(bounds-file): kernel/bounds.s Kbuild
 	$(Q)mkdir -p $(dir $@)
@@ -79,7 +79,7 @@ endef
 arch/$(SRCARCH)/kernel/asm-offsets.s: arch/$(SRCARCH)/kernel/asm-offsets.c \
                                       $(obj)/$(bounds-file) FORCE
 	$(Q)mkdir -p $(dir $@)
-	$(call if_changed_dep,cc_s_c)
+	$(call if_changed_dep,gcc_s_c)
 
 $(obj)/$(offsets-file): arch/$(SRCARCH)/kernel/asm-offsets.s Kbuild
 	$(call cmd,offsets)
