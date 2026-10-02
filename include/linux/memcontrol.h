@@ -84,7 +84,7 @@ extern struct mem_cgroup *mem_cgroup_from_task(struct task_struct *p);
 extern struct mem_cgroup *try_get_mem_cgroup_from_mm(struct mm_struct *mm);
 
 extern struct mem_cgroup *parent_mem_cgroup(struct mem_cgroup *memcg);
-extern struct mem_cgroup *mem_cgroup_from_cont(struct cgroup *cont);
+extern struct mem_cgroup *mem_cgroup_from_css(struct cgroup_subsys_state *css);
 
 static inline
 bool mm_match_cgroup(const struct mm_struct *mm, const struct mem_cgroup *memcg)
@@ -149,9 +149,7 @@ extern int do_swap_account;
 
 static inline bool mem_cgroup_disabled(void)
 {
-	if (mem_cgroup_subsys.disabled)
-		return true;
-	return false;
+	return !cgroup_subsys_enabled(memory_cgrp_subsys);
 }
 
 void __mem_cgroup_begin_update_page_stat(struct page *page, bool *locked,
@@ -516,6 +514,8 @@ memcg_kmem_newpage_charge(gfp_t gfp, struct mem_cgroup **memcg, int order)
 	if (!memcg_kmem_enabled())
 		return true;
 
+	if (gfp & __GFP_NOACCOUNT)
+		return true;
 	/*
 	 * __GFP_NOFAIL allocations will move on even if charging is not
 	 * possible. Therefore we don't even try, and have this allocation
@@ -588,6 +588,8 @@ static __always_inline struct kmem_cache *
 memcg_kmem_get_cache(struct kmem_cache *cachep, gfp_t gfp)
 {
 	if (!memcg_kmem_enabled())
+		return cachep;
+	if (gfp & __GFP_NOACCOUNT)
 		return cachep;
 	if (gfp & __GFP_NOFAIL)
 		return cachep;

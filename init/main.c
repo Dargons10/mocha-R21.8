@@ -76,6 +76,7 @@
 #include <linux/elevator.h>
 #include <linux/random.h>
 #include <linux/sched_clock.h>
+#include <linux/proc_ns.h>
 
 #include <linux/pasr.h>
 #include <asm/io.h>
@@ -135,6 +136,13 @@ static char *static_command_line;
 
 static char *execute_command;
 static char *ramdisk_execute_command;
+
+/*
+ * Used to generate warnings if static_key manipulation functions are used
+ * before jump_label_init is called.
+ */
+bool static_key_initialized __read_mostly = false;
+EXPORT_SYMBOL_GPL(static_key_initialized);
 
 /*
  * If set, this is an indication to the drivers that reset the underlying
@@ -635,6 +643,7 @@ asmlinkage void __init start_kernel(void)
 #ifdef CONFIG_PROC_FS
 	proc_root_init();
 #endif
+	nsfs_init();
 	cgroup_init();
 	cpuset_init();
 	taskstats_init_early();
