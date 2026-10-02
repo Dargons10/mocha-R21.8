@@ -18,6 +18,7 @@
 
 #include <linux/resource.h>
 #include <linux/platform_device.h>
+#include <linux/slab.h>
 #include <linux/wlan_plat.h>
 #include <linux/delay.h>
 #include <linux/gpio.h>

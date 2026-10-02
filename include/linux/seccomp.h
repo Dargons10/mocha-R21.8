@@ -38,7 +38,7 @@ static inline int secure_computing(void)
 /* A wrapper for architectures supporting only SECCOMP_MODE_STRICT. */
 static inline void secure_computing_strict(int this_syscall)
 {
-	BUG_ON(secure_computing(this_syscall) != 0);
+	BUG_ON(secure_computing() != 0);
 }
 
 #define SECCOMP_PHASE1_OK	0
@@ -62,7 +62,7 @@ static inline int seccomp_mode(struct seccomp *s)
 struct seccomp { };
 struct seccomp_filter { };
 
-static inline int secure_computing(int this_syscall) { return 0; }
+static inline int secure_computing(void) { return 0; }
 static inline void secure_computing_strict(int this_syscall) { return; }
 
 static inline long prctl_get_seccomp(void)

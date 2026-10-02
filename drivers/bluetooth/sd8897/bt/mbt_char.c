@@ -153,11 +153,11 @@ mbtchar_chown(char *name, uid_t user, gid_t group)
 	newattrs.ia_valid = ATTR_CTIME;
 	if (user != (uid_t) (-1)) {
 		newattrs.ia_valid |= ATTR_UID;
-		newattrs.ia_uid = user;
+		newattrs.ia_uid = make_kuid(current_user_ns(), user);
 	}
 	if (group != (gid_t) (-1)) {
 		newattrs.ia_valid |= ATTR_GID;
-		newattrs.ia_gid = group;
+		newattrs.ia_gid = make_kgid(current_user_ns(), group);
 	}
 	if (!S_ISDIR(inode->i_mode))
 		newattrs.ia_valid |=

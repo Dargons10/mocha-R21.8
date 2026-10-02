@@ -1598,6 +1598,11 @@ extern int register_netdevice_notifier(struct notifier_block *nb);
 extern int unregister_netdevice_notifier(struct notifier_block *nb);
 extern int call_netdevice_notifiers(unsigned long val, struct net_device *dev);
 
+static inline struct net_device *netdev_notifier_info_to_dev(const void *info)
+{
+	return (struct net_device *)info;
+}
+
 
 extern rwlock_t				dev_base_lock;		/* Device list lock */
 

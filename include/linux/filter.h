@@ -422,7 +422,6 @@ struct bpf_prog {
 	};
 };
 
-extern int sk_filter(struct sock *sk, struct sk_buff *skb);
 
 struct sk_filter {
 	atomic_t	refcnt;

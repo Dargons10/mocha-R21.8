@@ -209,8 +209,8 @@ set_parameters(struct quadd_parameters *p)
 		return -ESRCH;
 	}
 
-	current_uid = current_fsuid();
-	task_uid = task_uid(task);
+	current_uid = from_kuid(&init_user_ns, current_fsuid());
+	task_uid = from_kuid(&init_user_ns, task_uid(task));
 	pr_info("owner/task uids: %u/%u\n", current_uid, task_uid);
 
 	if (!capable(CAP_SYS_ADMIN)) {

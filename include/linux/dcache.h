@@ -102,6 +102,7 @@ extern unsigned int full_name_hash(const unsigned char *, unsigned int);
 #endif
 
 #define d_lock	d_lockref.lock
+#define d_count	d_lockref.count
 
 struct dentry {
 	/* RCU lookup touched fields */
@@ -412,6 +413,23 @@ static inline bool d_managed(struct dentry *dentry)
 static inline bool d_mountpoint(struct dentry *dentry)
 {
 	return dentry->d_flags & DCACHE_MOUNTED;
+}
+
+/**
+ * d_inode - Get the actual inode of this dentry
+ * @dentry: The dentry to query
+ *
+ * This is the helper normal filesystems should use to get at their own inodes
+ * in their own dentries and ignore the layering superimposed upon them.
+ */
+static inline struct inode *d_inode(const struct dentry *dentry)
+{
+	return dentry->d_inode;
+}
+
+static inline bool d_is_negative(const struct dentry *dentry)
+{
+	return (d_inode(dentry) == NULL);
 }
 
 extern int sysctl_vfs_cache_pressure;

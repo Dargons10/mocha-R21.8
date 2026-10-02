@@ -22,6 +22,7 @@
 #include <asm/cacheflush.h>
 #include <asm/hwcap.h>
 #include <asm/opcodes.h>
+#include <asm/rodata.h>
 
 #include "bpf_jit_32.h"
 

@@ -149,7 +149,7 @@ static int cls_bpf_init(struct tcf_proto *tp)
 	if (head == NULL)
 		return -ENOBUFS;
 
-	INIT_LIST_HEAD_RCU(&head->plist);
+	INIT_LIST_HEAD(&head->plist);
 	rcu_assign_pointer(tp->root, head);
 
 	return 0;
