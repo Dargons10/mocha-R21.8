@@ -2309,6 +2309,30 @@ static struct file_system_type cgroup2_fs_type = {
 	.fs_flags = FS_USERNS_MOUNT,
 };
 
+/*
+ * Android's legacy userspace (init and libprocessgroup since before
+ * 3.18) mounts the cpuset controller using its own filesystem type:
+ * "mount -t cpuset none /dev/cpuset", and expects unprefixed control
+ * files (/dev/cpuset/cpus instead of /dev/cpuset/cpuset.cpus).  The
+ * generic cgroup code only registers "cgroup"/"cgroup2" fs types, so
+ * such a mount fails with ENODEV.  Map it to a legacy cgroup
+ * hierarchy containing cpuset with noprefix semantics.
+ */
+static struct dentry *cpuset_mount(struct file_system_type *fs_type, int flags,
+				   const char *unused_dev_name, void *data)
+{
+	char opts[] = "cpuset,noprefix";
+
+	return cgroup_mount(&cgroup_fs_type, flags, "none", opts);
+}
+
+static struct file_system_type cpuset_fs_type = {
+	.name = "cpuset",
+	.mount = cpuset_mount,
+	.kill_sb = cgroup_kill_sb,
+	.fs_flags = FS_USERNS_MOUNT,
+};
+
 static int cgroup_path_ns_locked(struct cgroup *cgrp, char *buf, size_t buflen,
 				 struct cgroup_namespace *ns)
 {
@@ -5799,6 +5823,7 @@ int __init cgroup_init(void)
 
 	WARN_ON(register_filesystem(&cgroup_fs_type));
 	WARN_ON(register_filesystem(&cgroup2_fs_type));
+	WARN_ON(register_filesystem(&cpuset_fs_type));
 	WARN_ON(!proc_create("cgroups", 0, NULL, &proc_cgroupstats_operations));
 
 	return 0;
