@@ -47,9 +47,9 @@ static struct blkcg_gq *__blkg_lookup(struct blkcg *blkcg,
  * update @pos_cgrp by calling cgroup_rightmost_descendant() to skip
  * subtree.
  */
-#define blkg_for_each_descendant_pre(d_blkg, pos_cgrp, p_blkg)		\
-	cgroup_for_each_descendant_pre((pos_cgrp), (p_blkg)->blkcg->css.cgroup) \
-		if (((d_blkg) = __blkg_lookup(cgroup_to_blkcg(pos_cgrp), \
+#define blkg_for_each_descendant_pre(d_blkg, pos_css, p_blkg)		\
+	css_for_each_descendant_pre((pos_css), &(p_blkg)->blkcg->css)	\
+		if (((d_blkg) = __blkg_lookup(css_to_blkcg(pos_css),	\
 					      (p_blkg)->q, false)))
 
 static bool blkcg_policy_enabled(struct request_queue *q,
@@ -939,8 +939,7 @@ struct cgroup_subsys blkio_cgrp_subsys = {
 	.css_offline = blkcg_css_offline,
 	.css_free = blkcg_css_free,
 	.can_attach = blkcg_can_attach,
-	.base_cftypes = blkcg_files,
-	.module = THIS_MODULE,
+	.legacy_cftypes = blkcg_files,
 
 	/*
 	 * blkio subsystem is utterly broken in terms of hierarchy support.
