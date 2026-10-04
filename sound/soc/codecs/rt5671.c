@@ -2749,6 +2749,11 @@ static const struct snd_soc_dapm_widget rt5671_dapm_widgets[] = {
 	SND_SOC_DAPM_MUX("VAD ADC Mux", SND_SOC_NOPM, 0, 0,
 		&rt5671_vad_adc_mux),
 
+#ifdef CONFIG_MACH_MOCHA
+	/* FM is an external I2S source, without an ALSA AIF4 playback stream.
+	 * The machine driver's FM pin switch controls this source. */
+	SND_SOC_DAPM_INPUT("FM Capture"),
+#endif
 	/* Audio Interface */
 	SND_SOC_DAPM_AIF_IN("AIF1RX", "AIF1 Playback", 0, SND_SOC_NOPM, 0, 0),
 	SND_SOC_DAPM_AIF_OUT("AIF1TX", "AIF1 Capture", 0, SND_SOC_NOPM, 0, 0),
@@ -3197,6 +3202,9 @@ static const struct snd_soc_dapm_route rt5671_dapm_routes[] = {
 	{ "IF2 DAC", NULL, "AIF2RX" },
 	{ "IF3 DAC", NULL, "AIF3RX" },
 	{ "IF4 DAC", NULL, "AIF4RX" },
+#ifdef CONFIG_MACH_MOCHA
+	{ "IF4 DAC", NULL, "FM Capture" },
+#endif
 
 	{ "IF1 DAC1", NULL, "I2S1" },
 	{ "IF1 DAC2", NULL, "I2S1" },

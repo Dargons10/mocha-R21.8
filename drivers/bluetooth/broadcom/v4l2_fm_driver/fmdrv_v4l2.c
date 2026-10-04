@@ -348,70 +348,107 @@ static ssize_t show_fmrx_fm_audio_pins(struct device *dev,
 static ssize_t store_fmrx_fm_audio_pins(struct device *dev,
         struct device_attribute *attr, char *buf, size_t size)
 {
-    int ret = 0;
     struct fmdrv_ops *fmdev = dev_get_drvdata(dev);
-    if(strncmp(buf, fmdev->rx.current_pins, 3) == 0) /*I2S or PCM*/
-    {
-        return size;
-    }
+    unsigned char *command;
+    const char *pins;
+    int ret;
 
-    else if(strncmp(buf, "PCM", 3) == 0) /*use PCM pins*/
-    {
-        //send VSC to switch I2S to PCM pins
- #if ROUTE_FM_I2S_MASTER_TO_PCM_PINS
-        V4L2_FM_DRV_DBG(V4L2_DBG_OPEN, "Routing I2S audio over PCM pins in master mode");
-        ret = fmc_send_cmd(fmdev, 0, i2s_master_on_pcm_pins, 5, VSC_HCI_CMD, &fmdev->maintask_completion, NULL, NULL);
-        if (ret < 0)
-        {
-            V4L2_FM_DRV_ERR("(fmdrv): Error setting switch I2s path to PCM pins as a master");
-            return ret;
-        }
+    if (sysfs_streq(buf, "PCM")) {
+#if ROUTE_FM_I2S_MASTER_TO_PCM_PINS
+        command = i2s_master_on_pcm_pins;
+        pins = "PCM-master";
+#elif ROUTE_FM_I2S_SLAVE_TO_PCM_PINS
+        command = i2s_slave_on_pcm_pins;
+        pins = "PCM-slave";
+#else
+        return -EOPNOTSUPP;
 #endif
-
-#if ROUTE_FM_I2S_SLAVE_TO_PCM_PINS
-    V4L2_FM_DRV_DBG(V4L2_DBG_OPEN, "Routing I2S audio over PCM pins in slave mode");
-    ret = fmc_send_cmd(fmdev, 0, i2s_slave_on_pcm_pins, 5, VSC_HCI_CMD, &fmdev->maintask_completion, NULL, NULL);
+#ifdef CONFIG_MACH_MOCHA
+    } else if (sysfs_streq(buf, "PCM-master")) {
+        command = i2s_master_on_pcm_pins;
+        pins = "PCM-master";
+    } else if (sysfs_streq(buf, "PCM-slave")) {
+        command = i2s_slave_on_pcm_pins;
+        pins = "PCM-slave";
+#endif
+    } else if (sysfs_streq(buf, "I2S")) {
+#if ROUTE_BT_I2S_MASTER_TO_PCM_PINS || ROUTE_FM_I2S_MASTER_TO_PCM_PINS
+        command = bt_master_on_pcm_pins;
+#else
+        command = bt_slave_on_pcm_pins;
+#endif
+        pins = "I2S";
+    } else {
+        return -EINVAL;
+    }
+    ret = fmc_send_cmd(fmdev, 0, command, 5, VSC_HCI_CMD,
+            &fmdev->maintask_completion, NULL, NULL);
     if (ret < 0)
-    {
-        V4L2_FM_DRV_ERR("(fmdrv): Error setting switch I2s path to PCM pins as a slave");
         return ret;
-    }
-#endif
-    sprintf(fmdev->rx.current_pins, "%s", buf);
-    return size;
-    }
-    else if(strncmp(buf, "I2S", 3) == 0) /*use I2S pins and release PCM pins for BT SCO*/
-    {
-    /*send VSC to release PCM pins*/
-#if ROUTE_BT_I2S_MASTER_TO_PCM_PINS
-        V4L2_FM_DRV_DBG(V4L2_DBG_OPEN, "Routing I2S audio over PCM pins in master mode");
-        ret = fmc_send_cmd(fmdev, 0, bt_master_on_pcm_pins, 5, VSC_HCI_CMD, &fmdev->maintask_completion, NULL, NULL);
-        if (ret < 0)
-        {
-            V4L2_FM_DRV_ERR("(fmdrv): Error setting switch I2s path to PCM pins as a master");
-            return ret;
-        }
-#endif
-
-#if ROUTE_FM_I2S_SLAVE_TO_PCM_PINS
-        V4L2_FM_DRV_DBG(V4L2_DBG_OPEN, "Routing I2S audio over PCM pins in slave mode");
-        ret = fmc_send_cmd(fmdev, 0, bt_slave_on_pcm_pins, 5, VSC_HCI_CMD, &fmdev->maintask_completion, NULL, NULL);
-        if (ret < 0)
-        {
-            V4L2_FM_DRV_ERR("(fmdrv): Error setting switch I2s path to PCM pins as a slave");
-            return ret;
-        }
-#endif
-        sprintf(fmdev->rx.current_pins, "%s", buf);
-        return size;
-    }
-    else
-    {
-        V4L2_FM_DRV_ERR("Wrong value: either PCM or I2S\n");
-        return ret;
-    }
+    /* The old 3-byte buffer and sprintf copied a newline and NUL past
+     * the end of rx.current_pins. Store only the validated mode name. */
+    strlcpy(fmdev->rx.current_pins, pins, sizeof(fmdev->rx.current_pins));
     return size;
 }
+
+#ifdef CONFIG_MACH_MOCHA
+static ssize_t show_fmrx_audio_status(struct device *dev,
+        struct device_attribute *attr, char *buf)
+{
+    struct fmdrv_ops *fmdev = dev_get_drvdata(dev);
+    static const unsigned char regs[] = { FM_REG_RDS_SYS,
+        FM_REG_FM_CTRL, FM_REG_PCM_ROUTE, FM_REG_RSSI, FM_REG_SNR,
+        FM_REG_VOLUME_CTRL };
+    unsigned int values[ARRAY_SIZE(regs)];
+    unsigned char response[256], length;
+    int i, ret, response_len;
+
+    for (i = 0; i < ARRAY_SIZE(regs); ++i) {
+        length = regs[i] == FM_REG_VOLUME_CTRL ? 2 : 1;
+        memset(response, 0, sizeof(response));
+        ret = fmc_send_cmd(fmdev, regs[i], &length, sizeof(length), REG_RD,
+                &fmdev->maintask_completion, response, &response_len);
+        if (ret < 0)
+            return ret;
+        if (response_len != length)
+            return -EIO;
+        values[i] = response[0] | (length == 2 ? response[1] << 8 : 0);
+    }
+    return scnprintf(buf, PAGE_SIZE,
+        "system=0x%02x fm_ctrl=0x%02x pcm_route=0x%02x rssi_raw=0x%02x snr=%u volume=%u pins=%s\n",
+        values[0], values[1], values[2], values[3], values[4], values[5],
+        fmdev->rx.current_pins);
+}
+
+/* Root-only bench access to the documented audio-control bits. Enables
+ * distinguishing RF mute from manual mute without racing /dev/radio0 open. */
+static ssize_t show_fmrx_audio_ctrl(struct device *dev,
+        struct device_attribute *attr, char *buf)
+{
+    struct fmdrv_ops *fmdev = dev_get_drvdata(dev);
+    unsigned short value;
+    int ret = fm_rx_get_audio_ctrl(fmdev, &value);
+
+    if (ret < 0)
+        return ret;
+    return scnprintf(buf, PAGE_SIZE, "0x%04x\n", value);
+}
+
+static ssize_t store_fmrx_audio_ctrl(struct device *dev,
+        struct device_attribute *attr, char *buf, size_t size)
+{
+    struct fmdrv_ops *fmdev = dev_get_drvdata(dev);
+    unsigned short value;
+    int ret = kstrtou16(buf, 0, &value);
+
+    if (ret < 0)
+        return ret;
+    if (value & ~0x00ff)
+        return -EINVAL;
+    ret = fm_rx_set_audio_ctrl(fmdev, value);
+    return ret < 0 ? ret : size;
+}
+#endif
 
 
 static ssize_t show_fmrx_rssi_lvl(struct device *dev,
@@ -550,7 +587,20 @@ __ATTR(fmrx_chl_lvl, 0666, (void *) show_fmrx_channel_space,
 static struct kobj_attribute v4l2_fmrx_fm_audio_pins =
 __ATTR(fmrx_fm_audio_pins, 0666, (void *)show_fmrx_fm_audio_pins, (void *)store_fmrx_fm_audio_pins);
 
+#ifdef CONFIG_MACH_MOCHA
+static struct kobj_attribute v4l2_fmrx_audio_status =
+__ATTR(fmrx_audio_status, 0400, (void *)show_fmrx_audio_status, NULL);
+
+static struct kobj_attribute v4l2_fmrx_audio_ctrl =
+__ATTR(fmrx_audio_ctrl, 0600, (void *)show_fmrx_audio_ctrl,
+        (void *)store_fmrx_audio_ctrl);
+#endif
+
 static struct attribute *v4l2_fm_attrs[] = {
+#ifdef CONFIG_MACH_MOCHA
+    &v4l2_fmrx_audio_status.attr,
+    &v4l2_fmrx_audio_ctrl.attr,
+#endif
     &v4l2_fmrx_comp_scan.attr,
     &v4l2_fmrx_deemph_mode.attr,
     &v4l2_fmrx_rds_af.attr,
@@ -648,6 +698,8 @@ static int fm_v4l2_fops_open(struct file *file)
         V4L2_FM_DRV_ERR("(fmdrv): Error setting switch I2s path to PCM pins as a master");
         return ret;
     }
+    strlcpy(fmdev->rx.current_pins, "PCM-master",
+            sizeof(fmdev->rx.current_pins));
 #endif
 
 #if ROUTE_FM_I2S_SLAVE_TO_PCM_PINS
@@ -658,6 +710,8 @@ static int fm_v4l2_fops_open(struct file *file)
         V4L2_FM_DRV_ERR("(fmdrv): Error setting switch I2s path to PCM pins as a slave");
         return ret;
     }
+    strlcpy(fmdev->rx.current_pins, "PCM-slave",
+            sizeof(fmdev->rx.current_pins));
 #endif
 
     return 0;

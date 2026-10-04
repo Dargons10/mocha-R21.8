@@ -39,7 +39,11 @@
 *******************************************************************************/
 
 /* Set default World region */
+#ifdef CONFIG_MACH_MOCHA
+#define DEF_V4L2_FM_WORLD_REGION FM_REGION_EUR
+#else
 #define DEF_V4L2_FM_WORLD_REGION FM_REGION_NA
+#endif
 
 /* Set default Audio mode */
 #define DEF_V4L2_FM_AUDIO_MODE FM_AUTO_MODE
@@ -62,7 +66,12 @@
 /*Make this TRUE if FM I2S audio to be routed over */
 /*PCM lines in slave mode */
 #ifndef ROUTE_FM_I2S_MASTER_TO_PCM_PINS
+#ifdef CONFIG_MACH_MOCHA
+/* BCM FM clocks the PCM pins connected to RT5671 AIF4 (codec slave). */
+#define ROUTE_FM_I2S_MASTER_TO_PCM_PINS TRUE
+#else
 #define ROUTE_FM_I2S_MASTER_TO_PCM_PINS FALSE
+#endif
 #endif
 
 /*Never make both the above macros TRUE*/

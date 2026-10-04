@@ -36,6 +36,7 @@ int fm_rx_set_mute_mode(struct fmdrv_ops*, unsigned char);
 int fm_rx_set_rds_system(struct fmdrv_ops *, unsigned char);
 int fm_rx_set_volume(struct fmdrv_ops*, unsigned short);
 int fm_rx_set_audio_ctrl(struct fmdrv_ops *,unsigned short);
+int fm_rx_get_audio_ctrl(struct fmdrv_ops *, unsigned short *);
 
 int fm_rx_set_audio_mode(struct fmdrv_ops *, unsigned char);
 int fm_rx_set_region(struct fmdrv_ops*, unsigned char);
