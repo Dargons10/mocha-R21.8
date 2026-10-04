@@ -1035,6 +1035,11 @@ static void __init tegra_ardbeg_late_init(void)
 #ifdef CONFIG_BLUEDROID_PM
  	ardbeg_setup_bluedroid_pm();
 #endif
+#ifdef CONFIG_LINE_DISCIPLINE_DRIVER
+    /* Register the shared Bluetooth/FM transport on mocha's machine path. */
+    if (IS_ERR(platform_device_register_simple("bcm_ldisc", -1, NULL, 0)))
+        pr_err("mocha: failed to register Broadcom shared transport\n");
+#endif
 	ardbeg_sysedp_dynamic_capping_init();
 	ardbeg_sysedp_batmon_init();
 }

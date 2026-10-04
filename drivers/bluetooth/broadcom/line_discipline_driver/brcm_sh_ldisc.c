@@ -2259,18 +2259,13 @@ static int brcm_hci_uart_init( void )
         return err;
     }
 
-#ifdef CONFIG_BT_HCIUART_H4
-    h4_init();
-#endif
-#ifdef CONFIG_BT_HCIUART_BCSP
-    bcsp_init();
-#endif
-#ifdef CONFIG_BT_HCIUART_LL
-    ll_init();
-#endif
-#ifdef CONFIG_BT_HCIUART_BRCM
-    brcm_init();
-#endif
+    /* This is the Broadcom shared registry, separate from Linux hci_uart.
+     * brcm_hci.c supplies protocol 0; h4_init() registers in the other registry. */
+    err = brcm_init();
+    if (err) {
+        tty_unregister_ldisc(N_BRCM_HCI);
+        return err;
+    }
 
     /* initialize register lock spinlock */
     spin_lock_init(&reg_lock);
@@ -2287,18 +2282,7 @@ static void brcm_hci_uart_exit(struct hci_uart* hu)
     int err = 0;
     BT_LDISC_DBG(V4L2_DBG_INIT, "%s", __func__);
 
-#ifdef CONFIG_BT_HCIUART_H4
-    h4_deinit();
-#endif
-#ifdef CONFIG_BT_HCIUART_BCSP
-    bcsp_deinit();
-#endif
-#ifdef CONFIG_BT_HCIUART_LL
-    ll_deinit();
-#endif
-#ifdef CONFIG_BT_HCIUART_BRCM
     brcm_deinit();
-#endif
 
     kfree_skb(hu->tx_skb);
     /* Release tty registration of line discipline */
@@ -2361,7 +2345,6 @@ static int bcmbt_ldisc_probe(struct platform_device *pdev)
     }
 
     hu = kzalloc(sizeof(struct hci_uart), GFP_ATOMIC);
-    memset(hu, 0, sizeof(struct hci_uart));
     if (!hu) {
         pr_err("no mem to allocate");
         return -ENOMEM;

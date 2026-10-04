@@ -30,6 +30,7 @@
 #define _BT_DRV_H
 #include <net/bluetooth/bluetooth.h>
 #include <linux/interrupt.h>
+#include <linux/mutex.h>
 
 #define TRUE   1
 #define FALSE  0
@@ -73,7 +74,8 @@ struct brcm_bt_dev {
 
     long flag;                           /*  BT driver state machine info */
     struct sk_buff_head rx_q;            /* RX queue */
-    spinlock_t rx_q_lock;                /* Rx queue lock */
+    spinlock_t rx_q_lock;
+    struct mutex rx_read_lock;                /* Rx queue lock */
 
     struct sk_buff_head tx_q;            /* TX queue */
 #ifdef TASKLET_SUPPORT
