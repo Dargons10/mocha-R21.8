@@ -196,8 +196,8 @@ static int imx179_write_reg(struct imx179 *imx179, u16 reg, u8 val)
 
     /* Retry with exponential backoff on I2C failure */
     while (retries > 0) {
-        if (delay_us[3 - retries] > 0)
-            usleep_range(delay_us[3 - retries], delay_us[3 - retries] * 2);
+        if (delay_us[5 - retries] > 0)
+            usleep_range(delay_us[5 - retries], delay_us[5 - retries] * 2);
 
         ret = i2c_master_send(client, buf, 3);
         if (ret == 3)
@@ -647,27 +647,18 @@ static int imx179_s_stream(struct v4l2_subdev *sd, int enable)
                 /* Use 2x binning only when the 2x window fits in the sensor */
                 use_binning = (out_width * 2 <= sensor_w && out_height * 2 <= sensor_h);
 
-                if (use_binning) {
-                    binned_w = out_width * 2;
-                    binned_h = out_height * 2;
-                    reg_err |= imx179_write_reg(imx179, 0x0301, 0x05);
-                    reg_err |= imx179_write_reg(imx179, 0x0383, 0x01);
-                    reg_err |= imx179_write_reg(imx179, 0x0385, 0x01);
-                    reg_err |= imx179_write_reg(imx179, 0x0387, 0x01);
-                    reg_err |= imx179_write_reg(imx179, 0x0389, 0x01);
-                } else {
-                    binned_w = out_width;
-                    binned_h = out_height;
-                    reg_err |= imx179_write_reg(imx179, 0x0301, 0x00);
-                    reg_err |= imx179_write_reg(imx179, 0x0383, 0x00);
-                    reg_err |= imx179_write_reg(imx179, 0x0385, 0x00);
-                    reg_err |= imx179_write_reg(imx179, 0x0387, 0x00);
-                    reg_err |= imx179_write_reg(imx179, 0x0389, 0x00);
-                }
+                binned_w = use_binning ? out_width * 2 : out_width;
+                binned_h = use_binning ? out_height * 2 : out_height;
+                /* Stock IMX179 modes keep valid clock divisors and odd
+                 * increments in both modes. 0x0390 enables 2x2 binning. */
+                reg_err |= imx179_write_reg(imx179, 0x0301, 0x05);
+                reg_err |= imx179_write_reg(imx179, 0x0383, 0x01);
+                reg_err |= imx179_write_reg(imx179, 0x0387, 0x01);
+                reg_err |= imx179_write_reg(imx179, 0x0390, use_binning ? 0x01 : 0x00);
 
                 /* Center the window */
-                start_x = (sensor_w - binned_w) / 2;
-                start_y = (sensor_h - binned_h) / 2;
+                start_x = ((sensor_w - binned_w) / 2) & ~1;
+                start_y = ((sensor_h - binned_h) / 2) & ~1;
                 end_x = start_x + binned_w - 1;
                 end_y = start_y + binned_h - 1;
 
