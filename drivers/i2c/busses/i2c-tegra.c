@@ -618,13 +618,6 @@ static inline int tegra_i2c_clock_enable(struct tegra_i2c_dev *i2c_dev)
 			"Enabling div clk failed, err %d\n", ret);
 		goto div_clk_err;
 	}
-	/* Tegra124 clock-gating erratum: the first APB access after the clock
-	 * is (re-)enabled can be swallowed by the gating pipeline. That is
-	 * what makes the module miss the completion IRQ of the first transfer
-	 * (transfer runs, IRQ lost, 1 s timeout). A dummy read of
-	 * I2C_INT_STATUS flushes the APB pipeline before any transfer is
-	 * programmed. */
-	readl(i2c_dev->base + I2C_INT_STATUS);
 	return 0;
 
 div_clk_err:
