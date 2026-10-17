@@ -62,6 +62,7 @@
 #include <linux/fdtable.h>
 #include <linux/string.h>
 #include <linux/seq_file.h>
+#include <linux/cpufreq_times.h>
 #include <linux/namei.h>
 #include <linux/mnt_namespace.h>
 #include <linux/mm.h>
@@ -336,6 +337,14 @@ static int proc_pid_stack(struct seq_file *m, struct pid_namespace *ns,
 	kfree(entries);
 
 	return err;
+}
+#endif
+
+#ifdef CONFIG_CPU_FREQ_TIMES
+static int proc_pid_time_in_state(struct seq_file *m, struct pid_namespace *ns,
+				  struct pid *pid, struct task_struct *task)
+{
+	return cpufreq_task_times_show(m, task);
 }
 #endif
 
@@ -2719,6 +2728,9 @@ static const struct pid_entry tgid_base_stuff[] = {
 	INF("cmdline",    S_IRUGO, proc_pid_cmdline),
 	ONE("stat",       S_IRUGO, proc_tgid_stat),
 	ONE("statm",      S_IRUGO, proc_pid_statm),
+#ifdef CONFIG_CPU_FREQ_TIMES
+	ONE("time_in_state", S_IRUGO, proc_pid_time_in_state),
+#endif
 	REG("maps",       S_IRUGO, proc_pid_maps_operations),
 #ifdef CONFIG_NUMA
 	REG("numa_maps",  S_IRUGO, proc_pid_numa_maps_operations),
@@ -3114,6 +3126,9 @@ static const struct pid_entry tid_base_stuff[] = {
 	INF("cmdline",   S_IRUGO, proc_pid_cmdline),
 	ONE("stat",      S_IRUGO, proc_tid_stat),
 	ONE("statm",     S_IRUGO, proc_pid_statm),
+#ifdef CONFIG_CPU_FREQ_TIMES
+	ONE("time_in_state", S_IRUGO, proc_pid_time_in_state),
+#endif
 	REG("maps",      S_IRUGO, proc_tid_maps_operations),
 #ifdef CONFIG_CHECKPOINT_RESTORE
 	REG("children",  S_IRUGO, proc_tid_children_operations),

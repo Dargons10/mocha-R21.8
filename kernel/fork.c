@@ -12,6 +12,7 @@
  */
 
 #include <linux/slab.h>
+#include <linux/cpufreq_times.h>
 #include <linux/init.h>
 #include <linux/unistd.h>
 #include <linux/module.h>
@@ -211,6 +212,7 @@ static void account_kernel_stack(struct thread_info *ti, int account)
 
 void free_task(struct task_struct *tsk)
 {
+	cpufreq_task_times_free(tsk);
 	account_kernel_stack(tsk->stack, -1);
 	arch_release_thread_info(tsk->stack);
 	free_thread_info(tsk->stack);
