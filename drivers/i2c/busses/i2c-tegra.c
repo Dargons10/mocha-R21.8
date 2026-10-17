@@ -45,6 +45,14 @@
 #include <asm/unaligned.h>
 
 #define TEGRA_I2C_TIMEOUT			(msecs_to_jiffies(1000))
+/* Completion wait for a single message: every real transfer (2-byte register
+ * write, small read, ~90-register init burst) finishes in a few ms, so a
+ * lost completion IRQ is detected early and the xfer retry loop recovers
+ * instead of burning a full second per cold transfer. 250 ms is the sweet
+ * spot: 50 ms proved too aggressive (controller reset fired while the
+ * packet was still winding up, so every retry failed), while 1 s made each
+ * cold start burn 3 s. */
+#define TEGRA_I2C_XFER_TIMEOUT		(msecs_to_jiffies(250))
 #define TEGRA_I2C_RETRIES			3
 #define BYTES_PER_FIFO_WORD			4
 
@@ -1064,7 +1072,7 @@ static int tegra_i2c_xfer_msg(struct tegra_i2c_dev *i2c_dev,
 		i2c_readl(i2c_dev, I2C_INT_MASK));
 
 	ret = wait_for_completion_timeout(&i2c_dev->msg_complete,
-					TEGRA_I2C_TIMEOUT);
+					TEGRA_I2C_XFER_TIMEOUT);
 	if (ret == 0) {
 		dev_err(i2c_dev->dev, "--- register dump for debugging ----\n");
 		dev_err(i2c_dev->dev, "I2C_CNFG - 0x%x\n",
@@ -1235,6 +1243,7 @@ static int tegra_i2c_xfer(struct i2c_adapter *adap, struct i2c_msg msgs[],
 {
 	struct tegra_i2c_dev *i2c_dev = i2c_get_adapdata(adap);
 	int i;
+	int attempt;
 	int ret = 0;
 	BUG_ON(!rt_mutex_is_locked(&(adap->bus_lock)));
 	if (i2c_dev->is_suspended)
@@ -1258,37 +1267,53 @@ static int tegra_i2c_xfer(struct i2c_adapter *adap, struct i2c_msg msgs[],
 		return ret;
 	}
 
-	for (i = 0; i < num; i++) {
-		enum msg_end_type end_type = MSG_END_STOP;
-		enum msg_end_type next_msg_end_type = MSG_END_STOP;
+	/* The Tegra124 I2C module loses the completion IRQ on the first
+	 * transfer after its clock is (re-)enabled: that transfer burns the
+	 * full 1 s TEGRA_I2C_TIMEOUT and only succeeds on a retry. Retry the
+	 * message sequence here so callers (sensor init bursts, AE writes)
+	 * see one fast successful attempt instead of per-write 1 s timeouts
+	 * multiplied by their own backoff retries. */
+	for (attempt = 0; attempt < 3; attempt++) {
+		for (i = 0; i < num; i++) {
+			enum msg_end_type end_type = MSG_END_STOP;
+			enum msg_end_type next_msg_end_type = MSG_END_STOP;
 
-		if (i < (num - 1)) {
-			if (msgs[i + 1].flags & I2C_M_NOSTART)
-				end_type = MSG_END_CONTINUE;
-			else
-				end_type = MSG_END_REPEAT_START;
-			if (i < num - 2) {
-				if (msgs[i + 2].flags & I2C_M_NOSTART)
-					next_msg_end_type = MSG_END_CONTINUE;
+			if (i < (num - 1)) {
+				if (msgs[i + 1].flags & I2C_M_NOSTART)
+					end_type = MSG_END_CONTINUE;
 				else
-					next_msg_end_type = MSG_END_REPEAT_START;
-			}
-			if ((!(msgs[i].flags & I2C_M_RD)) && (msgs[i].len <= 8) && (msgs[i+1].flags & I2C_M_RD)
-					&& (next_msg_end_type != MSG_END_CONTINUE) && (end_type == MSG_END_REPEAT_START)) {
-				ret = tegra_i2c_xfer_msg(i2c_dev, &msgs[i], end_type, &msgs[i+1], next_msg_end_type);
-				if (ret)
-					break;
-				i++;
+					end_type = MSG_END_REPEAT_START;
+				if (i < num - 2) {
+					if (msgs[i + 2].flags & I2C_M_NOSTART)
+						next_msg_end_type = MSG_END_CONTINUE;
+					else
+						next_msg_end_type = MSG_END_REPEAT_START;
+				}
+				if ((!(msgs[i].flags & I2C_M_RD)) && (msgs[i].len <= 8) && (msgs[i+1].flags & I2C_M_RD)
+						&& (next_msg_end_type != MSG_END_CONTINUE) && (end_type == MSG_END_REPEAT_START)) {
+					ret = tegra_i2c_xfer_msg(i2c_dev, &msgs[i], end_type, &msgs[i+1], next_msg_end_type);
+					if (ret)
+						break;
+					i++;
+				} else {
+					ret = tegra_i2c_xfer_msg(i2c_dev, &msgs[i], end_type, NULL, next_msg_end_type);
+					if (ret)
+						break;
+				}
 			} else {
 				ret = tegra_i2c_xfer_msg(i2c_dev, &msgs[i], end_type, NULL, next_msg_end_type);
 				if (ret)
 					break;
 			}
-		} else {
-			ret = tegra_i2c_xfer_msg(i2c_dev, &msgs[i], end_type, NULL, next_msg_end_type);
-			if (ret)
-				break;
 		}
+
+		if (ret == 0)
+			break;
+		if (ret != -ETIMEDOUT && ret != -ENXIO)
+			break; /* NACK/protocol errors: retrying won't help */
+
+		dev_warn(i2c_dev->dev, "xfer failed (%d), retry %d\n", ret, attempt);
+		udelay(100);
 	}
 
 	tegra_i2c_clock_disable(i2c_dev);
