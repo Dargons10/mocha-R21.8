@@ -45,14 +45,13 @@
 #include <asm/unaligned.h>
 
 #define TEGRA_I2C_TIMEOUT			(msecs_to_jiffies(1000))
-/* Completion wait for a single message: every real transfer (2-byte register
- * write, small read, ~90-register init burst) finishes in a few ms, so a
- * lost completion IRQ is detected early and the xfer retry loop recovers
- * instead of burning a full second per cold transfer. 250 ms is the sweet
- * spot: 50 ms proved too aggressive (controller reset fired while the
- * packet was still winding up, so every retry failed), while 1 s made each
- * cold start burn 3 s. */
-#define TEGRA_I2C_XFER_TIMEOUT		(msecs_to_jiffies(250))
+/* Completion wait for a single message. Shortening it (250 ms, 50 ms) was
+ * tried and FAILED: the stuck transfer needs the full second to wind down,
+ * and resetting the module mid-packet poisons every retry (15-20
+ * consecutive -ETIMEDOUT). Keep the full TEGRA_I2C_TIMEOUT; the real fix
+ * for the lost first-transfer IRQ is the APB dummy read in
+ * tegra_i2c_clock_enable. The xfer retry loop stays as a safety net. */
+#define TEGRA_I2C_XFER_TIMEOUT		TEGRA_I2C_TIMEOUT
 #define TEGRA_I2C_RETRIES			3
 #define BYTES_PER_FIFO_WORD			4
 
