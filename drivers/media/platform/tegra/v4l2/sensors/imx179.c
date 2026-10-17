@@ -644,7 +644,10 @@ static int imx179_s_stream(struct v4l2_subdev *sd, int enable)
                 bool use_binning;
                 int reg_err = 0;
 
-                /* Use 2x binning only when the 2x window fits in the sensor */
+                /* Use 2x binning only when the 2x window fits in the sensor.
+                 * Binning keeps the preview FOV close to the native photo;
+                 * the Bayer phase of the binned readout is compensated in
+                 * the HAL demosaic (see bayerPattern per stream size). */
                 use_binning = (out_width * 2 <= sensor_w && out_height * 2 <= sensor_h);
 
                 binned_w = use_binning ? out_width * 2 : out_width;
