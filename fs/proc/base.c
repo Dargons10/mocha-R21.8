@@ -965,7 +965,7 @@ static ssize_t oom_adj_write(struct file *file, const char __user *buf,
 
 	task_lock(task);
 	if (!task->mm) {
-		err = -EINVAL;
+		err = (task->flags & PF_EXITING) ? -ESRCH : -EINVAL;
 		goto err_task_lock;
 	}
 
@@ -1068,7 +1068,7 @@ static ssize_t oom_score_adj_write(struct file *file, const char __user *buf,
 
 	task_lock(task);
 	if (!task->mm) {
-		err = -EINVAL;
+		err = (task->flags & PF_EXITING) ? -ESRCH : -EINVAL;
 		goto err_task_lock;
 	}
 
