@@ -68,12 +68,16 @@ struct imx179_framesize {
     u32 max_fps;
 };
 
+/* Every mode is a 1:1 centered crop of the full 3264x2448 readout
+ * (no binning, RGGB phase preserved for the software demosaic). The
+ * fixed line length 3440 and VTS 2510 set the frame period
+ * (200 MPixel/s / (3440 x 2510) ~= 23 fps) for all cropped heights. */
 static const struct imx179_framesize imx179_framesizes[] = {
-    { 3264, 2448, 15 },  /* 8MP @ 15fps */
-    { 2592, 1944, 20 },  /* 5MP @ 20fps */
-    { 1920, 1080, 30 },  /* 1080p @ 30fps */
-    { 1280, 720,  60 },  /* 720p @ 60fps */
-    { 640,  480,  90 },  /* VGA @ 90fps */
+    { 3264, 2448, 23 },  /* native 8MP, 1:1 readout */
+    { 2592, 1944, 23 },  /* 5MP center crop */
+    { 1920, 1080, 23 },  /* 1080p center crop */
+    { 1280, 720,  23 },  /* 720p center crop */
+    { 640,  480,  23 },  /* VGA center crop */
 };
 
 #define IMX179_NUM_FRAMESIZES ARRAY_SIZE(imx179_framesizes)
@@ -634,36 +638,33 @@ static int imx179_s_stream(struct v4l2_subdev *sd, int enable)
                 continue;
             }
 
-            /* Program output window and binning based on resolution */
+            /* Program the 1:1 readout window (centered crop) for the mode */
             {
                 u16 out_width = imx179->format.width;
                 u16 out_height = imx179->format.height;
                 u16 sensor_w = 3264, sensor_h = 2448;
                 u16 start_x, start_y, end_x, end_y;
-                u16 binned_w, binned_h;
-                bool use_binning;
                 int reg_err = 0;
 
-                /* Use 2x binning only when the 2x window fits in the sensor.
-                 * Binning keeps the preview FOV close to the native photo;
-                 * the Bayer phase of the binned readout is compensated in
-                 * the HAL demosaic (see bayerPattern per stream size). */
-                use_binning = (out_width * 2 <= sensor_w && out_height * 2 <= sensor_h);
-
-                binned_w = use_binning ? out_width * 2 : out_width;
-                binned_h = use_binning ? out_height * 2 : out_height;
-                /* Stock IMX179 modes keep valid clock divisors and odd
-                 * increments in both modes. 0x0390 enables 2x2 binning. */
+                /* 1:1 readout with a centered crop window, exactly like the
+                 * OV5693 front camera: every published mode is a native 1:1
+                 * window. 2x2 binning is never programmed on purpose: the
+                 * IMX179 binning sums the four photodiodes of each Bayer
+                 * cell, so its readout has no mosaic left to demosaic, and
+                 * any software demosaic (pattern 0/1/3) turns it into a 2x2
+                 * checkerboard. The crop keeps the full-resolution RGGB
+                 * phase (pattern 0) at the cost of a narrower preview FOV;
+                 * the offsets are kept even to preserve that phase. */
                 reg_err |= imx179_write_reg(imx179, 0x0301, 0x05);
                 reg_err |= imx179_write_reg(imx179, 0x0383, 0x01);
                 reg_err |= imx179_write_reg(imx179, 0x0387, 0x01);
-                reg_err |= imx179_write_reg(imx179, 0x0390, use_binning ? 0x01 : 0x00);
+                reg_err |= imx179_write_reg(imx179, 0x0390, 0x00);
 
-                /* Center the window */
-                start_x = ((sensor_w - binned_w) / 2) & ~1;
-                start_y = ((sensor_h - binned_h) / 2) & ~1;
-                end_x = start_x + binned_w - 1;
-                end_y = start_y + binned_h - 1;
+                /* Center the crop window on the active array */
+                start_x = ((sensor_w - out_width) / 2) & ~1;
+                start_y = ((sensor_h - out_height) / 2) & ~1;
+                end_x = start_x + out_width - 1;
+                end_y = start_y + out_height - 1;
 
                 reg_err |= imx179_write_reg(imx179, 0x0344, (start_x >> 8) & 0xFF);
                 reg_err |= imx179_write_reg(imx179, 0x0345, start_x & 0xFF);
@@ -691,10 +692,9 @@ static int imx179_s_stream(struct v4l2_subdev *sd, int enable)
                     continue;
                 }
 
-                pr_info("Output %dx%d window [%d,%d]-[%d,%d]%s\n",
+                pr_info("Output %dx%d window [%d,%d]-[%d,%d] 1:1 crop\n",
                         out_width, out_height,
-                        start_x, start_y, end_x, end_y,
-                        use_binning ? " binning=2x2" : "");
+                        start_x, start_y, end_x, end_y);
             }
 
             ret = imx179_write_reg(imx179, IMX179_REG_MODE_SELECT,
