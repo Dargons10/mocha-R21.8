@@ -1268,11 +1268,12 @@ static int tegra_i2c_xfer(struct i2c_adapter *adap, struct i2c_msg msgs[],
 
 	/* The Tegra124 I2C module loses the completion IRQ on the first
 	 * transfer after its clock is (re-)enabled: that transfer burns the
-	 * full 1 s TEGRA_I2C_TIMEOUT and only succeeds on a retry. Retry the
-	 * message sequence here so callers (sensor init bursts, AE writes)
-	 * see one fast successful attempt instead of per-write 1 s timeouts
-	 * multiplied by their own backoff retries. */
-	for (attempt = 0; attempt < 3; attempt++) {
+	 * full 1 s TEGRA_I2C_TIMEOUT and only succeeds on the 4th attempt
+	 * (empirically ~32 ms after 3rd failure). Retry the message sequence
+	 * here so callers (sensor init bursts, AE writes) see one fast
+	 * successful attempt instead of per-write 1 s timeouts multiplied
+	 * by their own backoff retries. */
+	for (attempt = 0; attempt < 4; attempt++) {
 		for (i = 0; i < num; i++) {
 			enum msg_end_type end_type = MSG_END_STOP;
 			enum msg_end_type next_msg_end_type = MSG_END_STOP;
