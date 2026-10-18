@@ -881,7 +881,7 @@ static int tegra_vi_s_ctrl(struct file *file, void *fh, struct v4l2_control *ctr
         return -EINVAL;
     }
     ret = v4l2_s_ctrl(NULL, chan->sensor_sd->ctrl_handler, ctrl);
-    pr_info("s_ctrl ch%d id=%d val=%d (sensor) -> ret=%d\n",
+    dev_dbg(data->vi->dev, "s_ctrl ch%d id=%d val=%d (sensor) -> ret=%d\n",
             data->channel, ctrl->id, ctrl->value, ret);
     return ret;
 }
@@ -902,7 +902,7 @@ static int tegra_vi_g_ctrl(struct file *file, void *fh, struct v4l2_control *ctr
     if (chan->focuser_sd && chan->focuser_sd->ctrl_handler) {
         ret = v4l2_g_ctrl(chan->focuser_sd->ctrl_handler, ctrl);
         if (ret != -EINVAL) {
-            pr_info("g_ctrl ch%d id=%d val=%d (focuser) -> ret=%d\n",
+            dev_dbg(data->vi->dev, "g_ctrl ch%d id=%d val=%d (focuser) -> ret=%d\n",
                     data->channel, ctrl->id, ctrl->value, ret);
             return ret;
         }
@@ -918,7 +918,7 @@ static int tegra_vi_g_ctrl(struct file *file, void *fh, struct v4l2_control *ctr
         return -EINVAL;
     }
     ret = v4l2_g_ctrl(chan->sensor_sd->ctrl_handler, ctrl);
-    pr_info("g_ctrl ch%d id=%d val=%d (sensor) -> ret=%d\n",
+    dev_dbg(data->vi->dev, "g_ctrl ch%d id=%d val=%d (sensor) -> ret=%d\n",
             data->channel, ctrl->id, ctrl->value, ret);
     return ret;
 }
