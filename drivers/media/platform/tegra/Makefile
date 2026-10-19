@@ -41,15 +41,15 @@ obj-$(CONFIG_VIDEO_IMX135)	+= imx135.o
 # obj-$(CONFIG_VIDEO_AR0261)	+= ar0261.o
 # obj-$(CONFIG_VIDEO_AR1335)	+= ar1335.o
 # obj-$(CONFIG_DEBUG_FS)		+= nvc_debugfs.o
-# DISABLED (legacy NVIDIA NVC OV5693) - conflicts with v4l2/sensors/ov5693.c
-# obj-$(CONFIG_VIDEO_OV5693)	+= ov5693.o
-# DISABLED (legacy NVIDIA NVC AD5823) - conflicts with v4l2/sensors/ad5823.c
-# obj-$(CONFIG_VIDEO_AD5823)	+= ad5823.o
+# ENABLED for F2 legacy NVIDIA TVC/NVC stack (abobo7 17.1 architecture)
+obj-$(CONFIG_VIDEO_IMX179)	+= imx179.o
+obj-$(CONFIG_VIDEO_OV5693)	+= ov5693.o
+obj-$(CONFIG_VIDEO_AD5823)	+= ad5823.o
 obj-$(CONFIG_VIDEO_OV7695)	+= ov7695.o
 obj-$(CONFIG_VIDEO_MT9M114)	+= mt9m114.o
 obj-$(CONFIG_VIDEO_OV4689)	+= ov4689.o
-# DISABLED (legacy NVIDIA NVC) - using V4L2 MC pipeline
-# obj-$(CONFIG_VIDEO_CAMERA)	+= camera.o
+# ENABLED for F2 legacy NVIDIA TVC/NVC stack (pcl-generic /dev/camera.pcl)
+obj-$(CONFIG_VIDEO_CAMERA)	+= camera.o
 obj-$(CONFIG_VIDEO_MOCHA_V4L2)	+= mocha_v4l2.o
 obj-$(CONFIG_CAMERA_COMMON)	+= camera_common.o
 

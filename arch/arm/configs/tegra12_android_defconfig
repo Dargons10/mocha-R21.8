@@ -688,11 +688,12 @@ CONFIG_INV_MPU_IIO=y
 CONFIG_DTS_INV_MPU_IIO=y
 
 # Cameras
-# Legacy NVIDIA NVC drivers - conflict with V4L2 subdev drivers
-# CONFIG_VIDEO_IMX179 is not set
-# CONFIG_VIDEO_AD5823 is not set
-# CONFIG_VIDEO_OV5693 is not set
-# V4L2 camera pipeline (ported from Oreo/AvengedKernel)
+# F2: legacy NVIDIA NVC/TVC drivers enabled (OF probe via tegra124-mocha-camera-tvc.dtsi)
+CONFIG_VIDEO_IMX179=y
+CONFIG_VIDEO_AD5823=y
+CONFIG_VIDEO_OV5693=y
+CONFIG_VIDEO_CAMERA=y
+# V4L2 camera pipeline (kept compiled; DT compatibles removed so they stay inert)
 CONFIG_VIDEO_MOCHA_V4L2=y
 CONFIG_VIDEO_TEGRA_VI_V4L2=y
 CONFIG_VIDEO_TEGRA_CSI=y

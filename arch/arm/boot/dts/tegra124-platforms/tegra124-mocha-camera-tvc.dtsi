@@ -1,0 +1,70 @@
+/*
+ * Copyright (c) 2026, Dargons10.  All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify it
+ * under the terms and conditions of the GNU General Public License,
+ * version 2, as published by the Free Software Foundation.
+ *
+ * Tegra124 Mocha (MiPad 1st Gen) camera bindings for the LEGACY NVIDIA
+ * TVC/NVC stack (drivers/media/platform/tegra/*.c + camera.pcl).
+ *
+ * Model (matches the 3.10.108 root drivers, Zack8141 TN8 style):
+ *  - sensors are i2c OF nodes probed via of_match (compatible nvidia,*)
+ *  - camera.pcl misc device instantiated by the pcl-generic platform
+ *    device auxdata in board-mocha.c bound to the nvidia,tegra124-camera
+ *    node below; libnvmm creates/manges devices through ioctl on it.
+ *  - VI/CSI/ISP live in the base tegra124.dtsi nvhost nodes (CONFIG_GRHOST).
+ *
+ * Hardware (same wiring as tegra124-mocha-camera-mc.dtsi):
+ *   Rear:  IMX179 @i2c 0x10, reset=PBB3(219), af_pwdn=PBB7(223), MCLK1
+ *   AF:    AD5823 @i2c 0x0c, af-pwdn=PBB7(223)
+ *   Front: OV5693 @i2c 0x36, reset=PCC1(225) (used as pwdn by NVC), MCLK2
+ *   Regulators: LDO4 avdd-cam 2.7V, LDO2 1.8V, LDO6 vdd-cam-af 1.8V,
+ *               LDO7 avdd-cam-af 2.7V (palmas e1736).
+ */
+
+#include <dt-bindings/gpio/tegra-gpio.h>
+
+/ {
+	camera {
+		compatible = "nvidia,tegra124-camera", "simple-bus";
+		status = "okay";
+	};
+
+	i2c@7000c500 {
+		status = "okay";
+		clock-frequency = <400000>;
+
+		imx179@10 {
+			compatible = "nvidia,imx179";
+			reg = <0x10>;
+			clocks = <&tegra_car 20>;
+			clock-names = "default_mclk";
+			reset-gpios = <&gpio TEGRA_GPIO(BB, 3) GPIO_ACTIVE_HIGH>;
+			af-gpios = <&gpio TEGRA_GPIO(BB, 7) GPIO_ACTIVE_HIGH>;
+			vana-supply = <&palmas_ldo4>;
+			vdig-supply = <&palmas_ldo2>;
+			vif-supply = <&palmas_ldo6>;
+			nvidia,ext_reg;
+		};
+
+		ad5823@0c {
+			compatible = "nvidia,ad5823";
+			reg = <0x0c>;
+			af-pwdn-gpios = <&gpio TEGRA_GPIO(BB, 7) GPIO_ACTIVE_HIGH>;
+			vdd-supply = <&palmas_ldo7>;
+		};
+
+		ov5693@36 {
+			compatible = "nvidia,ov5693";
+			reg = <0x36>;
+			clocks = <&tegra_car 21>;
+			clock-names = "mclk2";
+			nvidia,mclk_name = "mclk2";
+			reset-gpios = <&gpio TEGRA_GPIO(CC, 1) GPIO_ACTIVE_HIGH>;
+			avdd_ov5693-supply = <&palmas_ldo4>;
+			dvdd-supply = <&palmas_ldo2>;
+			dovdd-supply = <&palmas_ldo6>;
+		};
+	};
+};
