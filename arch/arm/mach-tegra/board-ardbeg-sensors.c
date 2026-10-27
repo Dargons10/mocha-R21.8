@@ -52,8 +52,24 @@ static struct i2c_board_info ardbeg_i2c_board_info_cm32181[] = {
 };
 #endif
 
-/* Legacy camera platform data - disabled, using Device Tree instead */
-#if 0
+/* Legacy camera platform data - REQUIRED: no desactivar.
+ *
+ * El stack de cámara NVIDIA legacy (pcl-generic + /dev/camera.pcl + drivers
+ * imx179/ov5693/ad5823) construye los i2c_board_info a partir del Device Tree
+ * (drivers/media/platform/tegra/cam_dev/of_camera.c:of_camera_create_pdata()),
+ * pero el `.platform_data` de cada cliente I2C se resuelve CONTRA ESTA TABLA de
+ * camera_data_blob, entregada al dispositivo platform por la tabla
+ * of_dev_auxdata (ardbeg_camera_auxdata(), llamada desde board-mocha.c).
+ *
+ * Con la tabla vacía bi->platform_data queda NULL: los drivers legacy no
+ * obtienen reguladores ni secuencias poweron/poweroff, nunca enlazan y
+ * misc_register() (drivers/media/platform/tegra/imx179.c) no crea
+ * /dev/imx179 ni /dev/ov5693. El HAL stock, que se guía por
+ * /etc/nvcamera.conf (/dev/imx179, /dev/ov5693), enumera 0 dispositivos.
+ * Las claves coinciden con las propiedades `platformdata` de
+ * arch/arm/boot/dts/tegra124-platforms/tegra124-mocha-camera.dtsi.
+ */
+#if 1
 static struct regulator *ov5693_1v2;
 static struct regulator *ov5693_1v8;
 static struct regulator *ov5693_afvdd;
@@ -396,40 +412,19 @@ static int ardbeg_camera_init(void)
 	pr_debug("%s: ++\n", __func__);
 	tegra_get_board_info(&board_info);
 
-	/* put CSIA/B/C/D/E IOs into DPD mode to
-	 * save additional power for ardbeg
+	/* CSIA/B/E no deben entrar en DPD en tn8/mocha: el CSI es el camino de
+	 * datos de la cámara. En Ardbeg (cámara opcional) sí ahorra energía.
 	 */
-	tegra_io_dpd_enable(&csia_io);
-	tegra_io_dpd_enable(&csib_io);
-	tegra_io_dpd_enable(&csie_io);
-
-	return 0;
-}
-#endif /* Legacy camera platform data disabled - using Device Tree */
-
-/* Stub camera init - Device Tree handles sensor registration */
-static int ardbeg_camera_init(void)
-{
-	pr_info("%s: Camera init via Device Tree (legacy disabled)\n", __func__);
-	return 0;
-}
-
-/* Camera auxdata stub - required for Device Tree camera support */
-static struct camera_data_blob ardbeg_camera_lut_stub[] = {
-	{},
-};
-
-void __init ardbeg_camera_auxdata(void *data)
-{
-	struct of_dev_auxdata *aux_lut = data;
-	while (aux_lut && aux_lut->compatible) {
-		if (!strcmp(aux_lut->compatible, "nvidia,tegra124-camera")) {
-			pr_info("%s: update camera lookup table.\n", __func__);
-			aux_lut->platform_data = ardbeg_camera_lut_stub;
-		}
-		aux_lut++;
+	if (!of_machine_is_compatible("nvidia,tn8") &&
+	    !of_machine_is_compatible("nvidia,mocha")) {
+		tegra_io_dpd_enable(&csia_io);
+		tegra_io_dpd_enable(&csib_io);
+		tegra_io_dpd_enable(&csie_io);
 	}
+
+	return 0;
 }
+#endif /* legacy camera platform data (pcl / NVC sensor blobs) */
 
 static struct pid_thermal_gov_params cpu_pid_params = {
 	.max_err_temp = 4000,
