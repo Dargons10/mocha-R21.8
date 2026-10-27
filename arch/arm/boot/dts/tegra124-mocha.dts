@@ -12,7 +12,7 @@
 /* end of static dtsi files */
 
 #include "tegra124-platforms/tegra124-mocha-sysedp.dtsi"
-#include "tegra124-platforms/tegra124-mocha-camera.dtsi"
+#include "tegra124-platforms/tegra124-mocha-camera-tvc.dtsi"
 #include "panel-s-wqxga-7-9-x6.dtsi"
 
 / {
@@ -37,12 +37,14 @@
 	};
 
 	host1x {
-		/* Disable legacy VI node from SoC to avoid conflict with our mocha-vi */
+		/* Plan A (HAL stock / TVC): VI e ISP vuelven a vivir en los nodos
+		 * nvhost de tegra124.dtsi. Estaban disabled por la ruta B (mocha-vi);
+		 * reaplicar el parche 0003 los vuelve a apagar. */
 		vi {
-			status = "disabled";
+			status = "okay";
 		};
-		isp@54600000 { status = "disabled"; };
-		isp@54680000 { status = "disabled"; };
+		isp@54600000 { status = "okay"; };
+		isp@54680000 { status = "okay"; };
 
 		/* tegradc.0 */
 		dc@54200000 {
