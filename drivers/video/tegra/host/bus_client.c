@@ -773,8 +773,14 @@ static long nvhost_channelctl(struct file *filp,
 	if ((_IOC_TYPE(cmd) != NVHOST_IOCTL_MAGIC) ||
 		(_IOC_NR(cmd) == 0) ||
 		(_IOC_NR(cmd) > NVHOST_IOCTL_CHANNEL_LAST) ||
-		(_IOC_SIZE(cmd) > NVHOST_IOCTL_CHANNEL_MAX_ARG_SIZE))
+		(_IOC_SIZE(cmd) > NVHOST_IOCTL_CHANNEL_MAX_ARG_SIZE)) {
+		nvhost_diag(NVHOST_DIAG_CHAN_EFAULT, -EFAULT,
+			    "channel ioctl 0x%x rechazado (type=0x%x nr=%u size=%u, magic='H' last=%u maxsize=%u)\n",
+			    cmd, _IOC_TYPE(cmd), _IOC_NR(cmd), _IOC_SIZE(cmd),
+			    (unsigned int)NVHOST_IOCTL_CHANNEL_LAST,
+			    (unsigned int)NVHOST_IOCTL_CHANNEL_MAX_ARG_SIZE);
 		return -EFAULT;
+	}
 
 	if (_IOC_DIR(cmd) & _IOC_WRITE) {
 		if (copy_from_user(buf, (void __user *)arg, _IOC_SIZE(cmd)))
@@ -1053,8 +1059,18 @@ static long nvhost_channelctl(struct file *filp,
 		break;
 	}
 	case NVHOST_IOCTL_CHANNEL_SUBMIT:
-		err = nvhost_ioctl_channel_submit(priv, (void *)buf);
+	{
+		struct nvhost_submit_args *args = (void *)buf;
+		err = nvhost_ioctl_channel_submit(priv, args);
+		if (err)
+			nvhost_diag(NVHOST_DIAG_SUBMIT_ERR, err,
+				"submit128 %s err=%d ver=%u syncpt_incrs=%u cmdbufs=%u relocs=%u waitchks=%u timeout=%u fence=%u\n",
+				dev_name(dev), err, args->submit_version,
+				args->num_syncpt_incrs, args->num_cmdbufs,
+				args->num_relocs, args->num_waitchks,
+				args->timeout, args->fence);
 		break;
+	}
 	case NVHOST_IOCTL_CHANNEL_SET_ERROR_NOTIFIER:
 		err = nvhost_init_error_notifier(priv->ch,
 			(struct nvhost_set_error_notifier *)buf);
@@ -1078,10 +1094,19 @@ static long nvhost_channelctl(struct file *filp,
 		break;
 	}
 	default:
+		nvhost_diag(NVHOST_DIAG_CHAN_NOTTY + _IOC_NR(cmd), -ENOTTY,
+			    "channel ioctl no reconocido 0x%x (nr=%u size=%u dir=%u)\n",
+			    cmd, _IOC_NR(cmd), _IOC_SIZE(cmd), _IOC_DIR(cmd));
 		nvhost_dbg_info("unrecognized ioctl cmd: 0x%x", cmd);
 		err = -ENOTTY;
 		break;
 	}
+
+	/* mocha-diag: menu de ioctls del fd de canal (primeros 3 por cmd y
+	 * despues 1 de cada 500 errores) */
+	nvhost_diag(NVHOST_DIAG_CHAN_IOCTL + _IOC_NR(cmd), err,
+		    "channel ioctl nr=%u size=%u err=%d\n",
+		    _IOC_NR(cmd), _IOC_SIZE(cmd), err);
 
 	mutex_unlock(&priv->ioctl_lock);
 

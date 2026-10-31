@@ -40,6 +40,81 @@
 #define MAX_SYNCPT_LENGTH	5
 #define NUM_SYSFS_ENTRY		5
 
+/* ------------------------------------------------------------------ */
+/* mocha-diag (kernel #15, temporal): el kernel actual rechaza en
+ * silencio los ioctls nvhost desconocidos (-ENOTTY con nvhost_dbg_info
+ * compileado fuera) y nvhost_syncpt_wait_timeout() devuelve al
+ * instante -EINVAL (id fuera de rango) o -EAGAIN (timeout==0) sin
+ * imprimir nada. Eso impide saber por que el monitor de syncpoints de
+ * libnvmm_camera_v3 falla ("Waiting on the syncpt semaphore failed").
+ * Estas trazas tienen presupuesto por punto de registro para no
+ * saturar el log (el flood llega a 36000 lineas en 10 min).
+ */
+#include <linux/printk.h>
+#include <linux/sched.h>
+#include <linux/spinlock.h>
+#include <stdarg.h>
+
+#define NVHOST_DIAG_SLOTS	40
+#define NVHOST_DIAG_LOG_FIRST	3
+#define NVHOST_DIAG_LOG_EVERY	500
+
+struct nvhost_diag_slot {
+	u32 key;
+	u32 calls;
+	u32 errs;
+};
+
+static struct nvhost_diag_slot nvhost_diag_slots[NVHOST_DIAG_SLOTS];
+static DEFINE_SPINLOCK(nvhost_diag_lock);
+
+void nvhost_diag(u32 key, int err, const char *fmt, ...)
+{
+	unsigned long flags;
+	struct va_format vaf;
+	va_list args;
+	int i, hole = -1;
+	u32 calls = 0, errs = 0;
+	bool do_log = false;
+
+	spin_lock_irqsave(&nvhost_diag_lock, flags);
+	for (i = 0; i < NVHOST_DIAG_SLOTS; i++) {
+		if (nvhost_diag_slots[i].key == key)
+			break;
+		if (hole < 0 && !nvhost_diag_slots[i].key)
+			hole = i;
+	}
+	if (i == NVHOST_DIAG_SLOTS) {
+		if (hole < 0) {
+			spin_unlock_irqrestore(&nvhost_diag_lock, flags);
+			return;
+		}
+		i = hole;
+		nvhost_diag_slots[i].key = key;
+	}
+	nvhost_diag_slots[i].calls++;
+	if (err)
+		nvhost_diag_slots[i].errs++;
+	calls = nvhost_diag_slots[i].calls;
+	errs = nvhost_diag_slots[i].errs;
+	if (calls <= NVHOST_DIAG_LOG_FIRST ||
+	    (err && (errs % NVHOST_DIAG_LOG_EVERY) == 0))
+		do_log = true;
+	spin_unlock_irqrestore(&nvhost_diag_lock, flags);
+
+	if (!do_log)
+		return;
+
+	va_start(args, fmt);
+	vaf.fmt = fmt;
+	vaf.va = &args;
+	printk(KERN_INFO "mocha-diag key=%u calls=%u errs=%u comm=%.16s: %pV",
+		key, calls, errs, current->comm, &vaf);
+	va_end(args);
+}
+EXPORT_SYMBOL(nvhost_diag);
+/* ------------------------------------------------------------------ */
+
 /* Name of sysfs node for min and max value */
 static const char *min_name = "min";
 static const char *max_name = "max";
@@ -238,8 +313,12 @@ int nvhost_syncpt_wait_timeout(struct nvhost_syncpt *sp, u32 id,
 	int err = 0, check_count = 0, low_timeout = 0;
 	u32 val, old_val, new_val;
 
-	if (!id || id >= nvhost_syncpt_nb_pts(sp))
+	if (!id || id >= nvhost_syncpt_nb_pts(sp)) {
+		nvhost_diag(NVHOST_DIAG_WAIT_BADID, -EINVAL,
+			    "wait: id=%u thresh=%u nb_pts=%u -> -EINVAL\n",
+			    id, thresh, nvhost_syncpt_nb_pts(sp));
 		return -EINVAL;
+	}
 
 	if (value)
 		*value = 0;
@@ -270,6 +349,9 @@ int nvhost_syncpt_wait_timeout(struct nvhost_syncpt *sp, u32 id,
 
 	if (!timeout) {
 		err = -EAGAIN;
+		nvhost_diag(NVHOST_DIAG_WAIT_ZERO_TIMEOUT, err,
+			    "wait: id=%u(%s) thresh=%u val=%u timeout=0 -> -EAGAIN\n",
+			    id, syncpt_op().name(sp, id), thresh, val);
 		goto done;
 	}
 
@@ -358,6 +440,9 @@ int nvhost_syncpt_wait_timeout(struct nvhost_syncpt *sp, u32 id,
 	nvhost_intr_put_ref(&(syncpt_to_dev(sp)->intr), id, ref);
 
 done:
+	if (err)
+		nvhost_diag(NVHOST_DIAG_WAIT_FAIL, err,
+			    "wait: id=%u thresh=%u -> err=%d\n", id, thresh, err);
 	nvhost_module_idle(syncpt_to_dev(sp)->dev);
 	return err;
 }

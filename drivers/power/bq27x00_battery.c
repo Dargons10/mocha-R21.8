@@ -1096,7 +1096,47 @@ static int bq27x00_battery_get_property(struct power_supply *psy,
 			val->intval = 1;
 			ret = 0;
 		} else {
-			ret = bq27x00_simple_value(di->cache.capacity, val);
+			/* mocha: el gauge es un BQ27520 (fw 0x0329, df 0x0105) pero
+			 * este driver solo conoce BQ27000/BQ27500 y la tabla de
+			 * nombres lo declara BQ27500 ({ "bq27520", BQ27500 }), o sea
+			 * lee con el mapa de comandos equivocado.
+			 *
+			 * Medido en los logs ("bq27x00 BMS soc %d %d ..."):
+			 *   capacity/rm/FCC        = 27 % / 1385 / 5322  <- 5322 no
+			 *      coincide ni con el FCC aprendido (6057) ni con la
+			 *      capacidad de diseo del data flash (6400)
+			 *   true_soc/true_cap/true_fcc = 39 % / 2319 / 6057  <- si
+			 *
+			 * Android pinta CAPACITY (27 %) pero calcula la autonomia con
+			 * CHARGE_NOW=true_cap y CHARGE_FULL=true_fcc (38 %): 11-13
+			 * puntos de discrepancia. Publicamos el SOC del propio gauge
+			 * para que el % sea coherente con los mAh. */
+			int soc = di->cache.capacity;
+			int derived;
+
+			if (di->cache.true_soc >= 0 && di->cache.true_soc <= 100)
+				soc = di->cache.true_soc;
+			else if (di->cache.true_fcc > 0 && di->cache.true_cap >= 0) {
+				derived = (100 * di->cache.true_cap) /
+					di->cache.true_fcc;
+				if (derived >= 0 && derived <= 100)
+					soc = derived;
+			}
+
+			if (soc < 0)
+				return -ENODATA;
+			if (soc > 100)
+				soc = 100;
+
+			if (di->cache.capacity >= 0 && abs(di->cache.capacity - soc) > 10)
+				dev_info_ratelimited(di->dev,
+					"bq27x00 SOC corregido: RSOC=%d gauge=%d (rm=%d true_cap=%d FCC=%d true_fcc=%d flag=%x)\n",
+					di->cache.capacity, soc, di->cache.remain_cap,
+					di->cache.true_cap, di->cache.full_charge_cap,
+					di->cache.true_fcc, di->cache.flags);
+
+			val->intval = soc;
+			ret = 0;
 			if (di->bat_status == POWER_SUPPLY_STATUS_FULL &&
 				(val->intval < 100 && val->intval > 95)) {
 				pr_info("bq27x00 move %d to FULL\n", di->cache.capacity);

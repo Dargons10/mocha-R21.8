@@ -171,4 +171,24 @@ bool nvhost_syncpt_wrapping_comparison(u32 syncpt, u32 threshold);
 
 struct nvhost_sync_timeline *nvhost_syncpt_timeline(struct nvhost_syncpt *sp,
 		int idx);
+
+/* ---- mocha-diag (trazas con presupuesto, ver nvhost_syncpt.c) ---- */
+enum {
+	/* menu de ioctls del fd de control: base + _IOC_NR(cmd) */
+	NVHOST_DIAG_CTRL_IOCTL	= 0x1000,
+	NVHOST_DIAG_CTRL_EFAULT	= 0x1100,
+	NVHOST_DIAG_CTRL_NOTTY	= 0x1180,
+	/* menu de ioctls del fd de canal (gpfifo) */
+	NVHOST_DIAG_CHAN_IOCTL	= 0x2000,
+	NVHOST_DIAG_CHAN_EFAULT	= 0x2100,
+	NVHOST_DIAG_CHAN_NOTTY	= 0x2180,
+	NVHOST_DIAG_SUBMIT_ERR	= 0x2200,
+	/* fallos de espera de syncpoint */
+	NVHOST_DIAG_WAIT_BADID		= 0x3000,
+	NVHOST_DIAG_WAIT_ZERO_TIMEOUT	= 0x3001,
+	NVHOST_DIAG_WAIT_FAIL		= 0x3002,
+};
+
+void nvhost_diag(u32 key, int err, const char *fmt, ...);
+
 #endif

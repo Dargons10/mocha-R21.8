@@ -34,6 +34,7 @@
 #include <linux/tegra_pm_domains.h>
 
 #include "dev.h"
+#include "nvhost_syncpt.h"
 #include <trace/events/nvhost.h>
 
 #include <linux/nvhost.h>
@@ -393,8 +394,14 @@ static long nvhost_ctrlctl(struct file *filp,
 	if ((_IOC_TYPE(cmd) != NVHOST_IOCTL_MAGIC) ||
 		(_IOC_NR(cmd) == 0) ||
 		(_IOC_NR(cmd) > NVHOST_IOCTL_CTRL_LAST) ||
-		(_IOC_SIZE(cmd) > NVHOST_IOCTL_CTRL_MAX_ARG_SIZE))
+		(_IOC_SIZE(cmd) > NVHOST_IOCTL_CTRL_MAX_ARG_SIZE)) {
+		nvhost_diag(NVHOST_DIAG_CTRL_EFAULT, -EFAULT,
+			    "ctrl ioctl 0x%x rechazado (type=0x%x nr=%u size=%u, magic='H' last=%u maxsize=%u)\n",
+			    cmd, _IOC_TYPE(cmd), _IOC_NR(cmd), _IOC_SIZE(cmd),
+			    (unsigned int)NVHOST_IOCTL_CTRL_LAST,
+			    (unsigned int)NVHOST_IOCTL_CTRL_MAX_ARG_SIZE);
 		return -EFAULT;
+	}
 
 	if (_IOC_DIR(cmd) & _IOC_WRITE) {
 		if (copy_from_user(buf, (void __user *)arg, _IOC_SIZE(cmd)))
@@ -462,9 +469,18 @@ static long nvhost_ctrlctl(struct file *filp,
 		err = nvhost_ioctl_ctrl_syncpt_waitmex(priv, (void *)buf);
 		break;
 	default:
+		nvhost_diag(NVHOST_DIAG_CTRL_NOTTY + _IOC_NR(cmd), -ENOTTY,
+			    "ctrl ioctl no reconocido 0x%x (nr=%u size=%u dir=%u)\n",
+			    cmd, _IOC_NR(cmd), _IOC_SIZE(cmd), _IOC_DIR(cmd));
 		err = -ENOTTY;
 		break;
 	}
+
+	/* mocha-diag: menu de ioctls del fd de control (primeros 3 por cmd y
+	 * despues 1 de cada 500 errores), con contador de llamadas/errores */
+	nvhost_diag(NVHOST_DIAG_CTRL_IOCTL + _IOC_NR(cmd), err,
+		    "ctrl ioctl nr=%u size=%u err=%d\n",
+		    _IOC_NR(cmd), _IOC_SIZE(cmd), err);
 
 	if ((err == 0) && (_IOC_DIR(cmd) & _IOC_READ))
 		err = copy_to_user((void __user *)arg, buf, _IOC_SIZE(cmd));
