@@ -346,6 +346,11 @@ struct bq27x00_device_info {
 	struct bq27x00_reg_cache cache;
 	int charge_design_full;
 	int fake_battery;
+	/* Qué modelo del gauge publicamos: 0 = RSOC/RM/FCC, 1 = TRUESOC/TRUECAP/
+	 * TRUEFCC.  Siempre el que menos carga declara (ver
+	 * bq27x00_pick_published_model). */
+	int pub_model;
+	int pub_soc;
 
 	int (*translate_temp)(int temperature);
 
@@ -1044,6 +1049,72 @@ static int bq27x00_simple_value(int value,
 #define to_bq27x00_device_info(x) container_of((x), \
 				struct bq27x00_device_info, bat);
 
+/*
+ * mocha, 2026-11-01.  El gauge entrega dos modelos internamente coherentes y
+ * distintos entre si unos 12 puntos (medido en los logs "bq27x00 BMS soc .."):
+ *
+ *   RSOC / RM / FCC             =  27 % / 1385 / 5322  mAh
+ *   TRUESOC / TRUECAP / TRUEFCC =  39 % / 2319 / 6057  mAh
+ *
+ * El kernel #16 publicaba el segundo, mas generoso: Android pinto 54-55 % mientras
+ * el coulombmetro marcaba 27 %; con la camara encendida la tension se hundo a
+ * 3,08 V con 2,1 A y la tablet se apago de golpe (brownout con USB caido).  Desde
+ * aqui se publica SIEMPRE el modelo que muestra menos carga, y siempre con su
+ * triple (SOC, mAh ahora, mAh lleno) para que CAPACITY, CHARGE_NOW y CHARGE_FULL
+ * no se contradigan entre si.
+ */
+static void bq27x00_pick_published_model(struct bq27x00_device_info *di)
+{
+	int gauge_soc = -1;
+	int true_soc = -1;
+
+	if (di->cache.full_charge_cap > 0 && di->cache.remain_cap >= 0)
+		gauge_soc = clamp_t(int, (100 * di->cache.remain_cap) /
+				di->cache.full_charge_cap, 0, 100);
+	else if (di->cache.capacity >= 0)
+		gauge_soc = clamp_t(int, di->cache.capacity, 0, 100);
+
+	if (di->cache.true_fcc > 0 && di->cache.true_cap >= 0)
+		true_soc = clamp_t(int, (100 * di->cache.true_cap) /
+				di->cache.true_fcc, 0, 100);
+	else if (di->cache.true_soc >= 0)
+		true_soc = clamp_t(int, di->cache.true_soc, 0, 100);
+
+	if (gauge_soc < 0 && true_soc < 0) {
+		di->pub_soc = -1;
+		di->pub_model = 0;
+		return;
+	}
+
+	if (true_soc < 0) {
+		di->pub_model = 0;
+		di->pub_soc = gauge_soc;
+		return;
+	}
+	if (gauge_soc < 0) {
+		di->pub_model = 1;
+		di->pub_soc = true_soc;
+		return;
+	}
+
+	if (gauge_soc <= true_soc) {
+		di->pub_model = 0;
+		di->pub_soc = gauge_soc;
+	} else {
+		di->pub_model = 1;
+		di->pub_soc = true_soc;
+	}
+
+	if (abs(gauge_soc - true_soc) > 10)
+		dev_info_ratelimited(di->dev,
+			"bq27x00 modelos en desacuerdo: RSOC=%d RM=%d FCC=%d -> %d%% | TRUESOC=%d TRUECAP=%d TRUEFCC=%d -> %d%% | publicado %d%% (%s) flag=%x\n",
+			di->cache.capacity, di->cache.remain_cap,
+			di->cache.full_charge_cap, gauge_soc,
+			di->cache.true_soc, di->cache.true_cap, di->cache.true_fcc,
+			true_soc, di->pub_soc,
+			di->pub_model ? "true" : "gauge", di->cache.flags);
+}
+
 static int bq27x00_battery_get_property(struct power_supply *psy,
 					enum power_supply_property psp,
 					union power_supply_propval *val)
@@ -1096,46 +1167,14 @@ static int bq27x00_battery_get_property(struct power_supply *psy,
 			val->intval = 1;
 			ret = 0;
 		} else {
-			/* mocha: el gauge es un BQ27520 (fw 0x0329, df 0x0105) pero
-			 * este driver solo conoce BQ27000/BQ27500 y la tabla de
-			 * nombres lo declara BQ27500 ({ "bq27520", BQ27500 }), o sea
-			 * lee con el mapa de comandos equivocado.
-			 *
-			 * Medido en los logs ("bq27x00 BMS soc %d %d ..."):
-			 *   capacity/rm/FCC        = 27 % / 1385 / 5322  <- 5322 no
-			 *      coincide ni con el FCC aprendido (6057) ni con la
-			 *      capacidad de diseo del data flash (6400)
-			 *   true_soc/true_cap/true_fcc = 39 % / 2319 / 6057  <- si
-			 *
-			 * Android pinta CAPACITY (27 %) pero calcula la autonomia con
-			 * CHARGE_NOW=true_cap y CHARGE_FULL=true_fcc (38 %): 11-13
-			 * puntos de discrepancia. Publicamos el SOC del propio gauge
-			 * para que el % sea coherente con los mAh. */
-			int soc = di->cache.capacity;
-			int derived;
+			/* Ver bq27x00_pick_published_model(): publicamos el modelo del
+			 * gauge que menos carga declara, con su triple coherente. */
+			bq27x00_pick_published_model(di);
 
-			if (di->cache.true_soc >= 0 && di->cache.true_soc <= 100)
-				soc = di->cache.true_soc;
-			else if (di->cache.true_fcc > 0 && di->cache.true_cap >= 0) {
-				derived = (100 * di->cache.true_cap) /
-					di->cache.true_fcc;
-				if (derived >= 0 && derived <= 100)
-					soc = derived;
-			}
-
-			if (soc < 0)
+			if (di->pub_soc < 0)
 				return -ENODATA;
-			if (soc > 100)
-				soc = 100;
 
-			if (di->cache.capacity >= 0 && abs(di->cache.capacity - soc) > 10)
-				dev_info_ratelimited(di->dev,
-					"bq27x00 SOC corregido: RSOC=%d gauge=%d (rm=%d true_cap=%d FCC=%d true_fcc=%d flag=%x)\n",
-					di->cache.capacity, soc, di->cache.remain_cap,
-					di->cache.true_cap, di->cache.full_charge_cap,
-					di->cache.true_fcc, di->cache.flags);
-
-			val->intval = soc;
+			val->intval = di->pub_soc;
 			ret = 0;
 			if (di->bat_status == POWER_SUPPLY_STATUS_FULL &&
 				(val->intval < 100 && val->intval > 95)) {
@@ -1160,10 +1199,14 @@ static int bq27x00_battery_get_property(struct power_supply *psy,
 		val->intval = POWER_SUPPLY_TECHNOLOGY_LION;
 		break;
 	case POWER_SUPPLY_PROP_CHARGE_NOW:
-		ret = bq27x00_simple_value(1000 * di->cache.true_cap, val);
+		bq27x00_pick_published_model(di);
+		ret = bq27x00_simple_value(1000 * (di->pub_model ?
+				di->cache.true_cap : di->cache.remain_cap), val);
 		break;
 	case POWER_SUPPLY_PROP_CHARGE_FULL:
-		ret = bq27x00_simple_value(1000 * di->cache.true_fcc, val);
+		bq27x00_pick_published_model(di);
+		ret = bq27x00_simple_value(1000 * (di->pub_model ?
+				di->cache.true_fcc : di->cache.full_charge_cap), val);
 		break;
 	case POWER_SUPPLY_PROP_CHARGE_FULL_DESIGN:
 		ret = bq27x00_simple_value(di->charge_design_full, val);
