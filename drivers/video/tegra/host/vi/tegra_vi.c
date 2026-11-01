@@ -422,6 +422,17 @@ void nvhost_vi_reset(struct platform_device *pdev)
 
 	udelay(10);
 
+	/* De-assert the CSI channel reset as well. The original stub only
+	 * released the CIL and CSI sensor resets (loop below) and left 0x1f
+	 * (MCCIF et al.) asserted in VI_CSI_<n>_SW_RESET, which keeps the VI
+	 * CSI channel held in reset forever: no MIPI packet is ever accepted,
+	 * so vi.0 reports zero interrupts and zero overflow while the sensor
+	 * itself is streaming ("[IMX179]: stream on.").
+	 * Behaviour now matches the working T124 reference, which writes the
+	 * MCCIF reset and then writes 0 to the same register.
+	 */
+	writel(0, reset_reg[0]);
+
 	for (i = 2; i > 0; i--)
 		writel(0, reset_reg[i]);
 }
