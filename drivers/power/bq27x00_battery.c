@@ -69,6 +69,17 @@
 
 #define DEBUG_1HZ_MAX_COUNT			15
 
+/* Recuperacion del gas gauge latcheado: ver bq27x00_heal_latched_gauge.
+ * El umbral de tension es alto a proposito: el gauge latchea tambien durante
+ * una caida real de tension, y re-latchea en media hora si la bateria no carga
+ * de verdad.  Medido hoy en mocha: sag a 3,34 V con ~1,1 A y flag 0x13f (bit 1
+ * SYSDOWN), y despues del GAUGED_RESET manual el nivel volvio a caerse a 0 con
+ * 3,65 V y TRUEFCC encogiendo (6044 -> 5126 mAh). */
+#define BQ27X00_LATCHED_MIN_MV			3700
+#define BQ27X00_LATCHED_SAMPLES			3
+#define BQ27X00_LATCHED_MAX_RESETS		2
+#define BQ27X00_LATCHED_COOLDOWN_MS		300000
+
 #define SYSDOWN_BIT             (1<<1)
 
 #define DEBUG_UPDATE_COMMAND 1
@@ -264,6 +275,7 @@ static int bq27x00_dump_partial_dataflash(struct bq27x00_device_info *di);
 static int bq27x00_control_cmd(struct bq27x00_device_info *di, u16 cmd);
 static void bq27x00_reset_registers(struct bq27x00_device_info *di);
 static int bq27x00_battery_read_control_reg(struct bq27x00_device_info *di);
+static int bq27x00_battery_reset(struct bq27x00_device_info *di);
 static int bq27x00_read_block_i2c(struct bq27x00_device_info *di, u8 reg,
 	unsigned char *buf, size_t len);
 static int bq27x00_battery_temperature(struct bq27x00_device_info *di,
@@ -351,6 +363,12 @@ struct bq27x00_device_info {
 	 * bq27x00_pick_published_model). */
 	int pub_model;
 	int pub_soc;
+
+	/* Gauge latcheado tras un corte brusco de tension: ver
+	 * bq27x00_heal_latched_gauge. */
+	int latched_samples;
+	int latched_resets;
+	unsigned long latched_next_jiffies;
 
 	int (*translate_temp)(int temperature);
 
@@ -589,6 +607,77 @@ static int bq27x00_battery_read_time(struct bq27x00_device_info *di, u8 reg)
 	return tval * 60;
 }
 
+/*
+ * Un corte brusco de tension deja el gas gauge latcheado: RSOC, RM, TRUECAP,
+ * TTE y TTF se quedan en 0 durante horas aunque este entrando corriente y la
+ * tension sea de 3,7 V (medido en mocha: 25 min de carga a 0,08-0,31 A
+ * publicando capacity=0, charge_now=0, rm=0, true_cap=0).  Sin RM el kernel no
+ * tiene forma de saber el nivel real, y la tablet vive publicando 0 %.
+ *
+ * El gauge admite GAUGED_RESET (subcomando 0x0041, RESET_SUBCMD, el mismo que
+ * este driver ya usa tras escribir el data flash): re-arranca el modelo interno
+ * a partir de la tension medida y no toca el data flash (el que borra lo
+ * aprendido es 0x0042, y aqui no se usa).  En mocha, tras el reset el gauge
+ * volvio a dar RSOC=18, RM=TRUECAP=1049 mAh y FCC coherente en 90 s.
+ *
+ * Lo hacemos solo si el gauge afirma "0 mAh" con una tension que dice lo
+ * contrario y el cargador por delante, confirmado en varias lecturas, con
+ * limite por arranque y enfriamiento: asi no entramos en bucle y no inflamos
+ * el nivel de una bateria que se esta agotando de verdad.
+ */
+static void bq27x00_heal_latched_gauge(struct bq27x00_device_info *di)
+{
+	if (di->cache.flags < 0) {
+		di->latched_samples = 0;
+		return;
+	}
+
+	/* El gauge esta calculando algo: no hay nada que arreglar. */
+	if (di->cache.capacity > 0 || di->cache.true_soc > 0 ||
+	    di->cache.remain_cap > 0 || di->cache.true_cap > 0) {
+		di->latched_samples = 0;
+		return;
+	}
+
+	/* Vacia de verdad, o sin capacidad aprendida con la que comparar. */
+	if (di->cache.voltage < BQ27X00_LATCHED_MIN_MV ||
+	    (di->cache.full_charge_cap <= 0 && di->cache.true_fcc <= 0)) {
+		di->latched_samples = 0;
+		return;
+	}
+
+	/* Solo con el cargador por delante: ante una descarga real el reset
+	 * estimaria el nivel por tension y resultaria optimista. */
+	if (di->bat_status != POWER_SUPPLY_STATUS_CHARGING) {
+		di->latched_samples = 0;
+		return;
+	}
+
+	if (di->latched_resets >= BQ27X00_LATCHED_MAX_RESETS)
+		return;
+	if (time_before(jiffies, di->latched_next_jiffies))
+		return;
+
+	if (++di->latched_samples < BQ27X00_LATCHED_SAMPLES)
+		return;
+
+	di->latched_samples = 0;
+	di->latched_resets++;
+	di->latched_next_jiffies = jiffies +
+		msecs_to_jiffies(BQ27X00_LATCHED_COOLDOWN_MS);
+
+	dev_warn(di->dev,
+		"bq27x00 gauge latcheado: 0 mAh con %d mV y FCC %d/%d, GAUGED_RESET %d/%d\n",
+		 di->cache.voltage, di->cache.full_charge_cap,
+		 di->cache.true_fcc, di->latched_resets,
+		 BQ27X00_LATCHED_MAX_RESETS);
+
+	bq27x00_battery_reset(di);
+	/* bq27x00_battery_poll relee solo (20 s con nivel bajo; el path de
+	 * get_property relee si hay mas de 5 s sin actualizar), asi que aqui no
+	 * re-armamos el trabajo. */
+}
+
 static void bq27x00_update(struct bq27x00_device_info *di)
 {
 	struct bq27x00_reg_cache cache = {0, };
@@ -813,6 +902,9 @@ static void bq27x00_update(struct bq27x00_device_info *di)
 		di->cache.remain_cap, di->cache.true_cap,
 		di->cache.full_charge_cap, di->cache.true_fcc,
 		di->cache.flags);
+
+	/* Gauge latcheado tras un apagon: re-arrancar su modelo interno. */
+	bq27x00_heal_latched_gauge(di);
 
 	di->last_update = jiffies;
 }
