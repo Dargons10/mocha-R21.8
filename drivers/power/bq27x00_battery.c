@@ -434,6 +434,12 @@ static unsigned int poll_interval = 60;
 module_param(poll_interval, uint, 0644);
 MODULE_PARM_DESC(poll_interval, "battery poll interval in seconds - " \
 				"0 disables polling");
+
+/* Techo de nivel por tension medida, ver bq27x00_voltage_soc_cap().  Poner a 0 para
+ * publicar lo que diga el gauge sin capar. */
+static int voltage_soc_cap = 1;
+module_param(voltage_soc_cap, int, 0644);
+MODULE_PARM_DESC(voltage_soc_cap, "cap the published SOC by the measured pack voltage");
 /*
  * Common code for BQ27x00 devices
  */
@@ -1142,6 +1148,46 @@ static int bq27x00_simple_value(int value,
 				struct bq27x00_device_info, bat);
 
 /*
+ * Techo de nivel segun la tension que esta dando el pack.
+ *
+ * RSOC (RM/FCC) y TRUECAP/TRUEFCC son contadores de un modelo interno.  Cuando el gauge se
+ * latchea tras un apagon, o cuando Impedance Track ha aprendido un FCC absurdo (medido en este
+ * tablet: 2806..6150 mAh en la misma bateria, con el data flash declarando 6400 mAh de diseno),
+ * esos contadores pueden decir 75 % mientras la maquina pide 1,17 A y el pack solo sostiene
+ * 3,54 V.  Ese nivel es fisicamente imposible: por encima del 20 % una celda de 6,4 Ah no baja
+ * de ~3,7 V ni a 2 A.
+ *
+ * Capar por tension hace dos cosas buenas:
+ *   - Android ve bajo el nivel y puede apagarse ordenadamente, en vez de apagarse de golpe con
+ *     el gauge anunciando 100 % (los dos apagones del 1 y 2 de noviembre, y el adb cayendose a
+ *     "offline" a mitad de las pruebas de camara).
+ *   - un apagon brusco es justamente lo que latchea el gauge y lo que corrompe el aprendizaje,
+ *     asi que el cap corta el circulo.
+ *
+ * Los umbrales van por debajo de la curva de reposo de la celda (LGIC992, perfil seleccionado por
+ * ADC IN0: id 992) para no recortar NUNCA un nivel bueno: solo recortamos cuando la tension es
+ * imposible para ese nivel.  Con el cargador puesto y el pack subiendo, la tension de absorcion
+ * es >4,3 V, o sea que el cap no interfiere al final de la carga.
+ */
+static int bq27x00_voltage_soc_cap(struct bq27x00_device_info *di)
+{
+	int mv = di->cache.voltage;
+
+	if (!voltage_soc_cap || mv <= 0 || mv > 4400)
+		return 100;
+
+	if (mv < 3350)
+		return 0;
+	if (mv < 3450)
+		return 5;
+	if (mv < 3600)
+		return 20;
+	if (mv < 3700)
+		return 40;
+	return 100;
+}
+
+/*
  * mocha, 2026-11-01.  El gauge entrega dos modelos internamente coherentes y
  * distintos entre si unos 12 puntos (medido en los logs "bq27x00 BMS soc .."):
  *
@@ -1159,6 +1205,7 @@ static void bq27x00_pick_published_model(struct bq27x00_device_info *di)
 {
 	int gauge_soc = -1;
 	int true_soc = -1;
+	int cap;
 
 	if (di->cache.full_charge_cap > 0 && di->cache.remain_cap >= 0)
 		gauge_soc = clamp_t(int, (100 * di->cache.remain_cap) /
@@ -1205,6 +1252,16 @@ static void bq27x00_pick_published_model(struct bq27x00_device_info *di)
 			di->cache.true_soc, di->cache.true_cap, di->cache.true_fcc,
 			true_soc, di->pub_soc,
 			di->pub_model ? "true" : "gauge", di->cache.flags);
+
+	cap = bq27x00_voltage_soc_cap(di);
+	if (cap < di->pub_soc) {
+		dev_info_ratelimited(di->dev,
+			"bq27x00 nivel imposible para la tension: %d%% -> %d%% (%d mV, flag=%x, RM=%d/%d TRUECAP=%d/%d)\n",
+			di->pub_soc, cap, di->cache.voltage, di->cache.flags,
+			di->cache.remain_cap, di->cache.full_charge_cap,
+			di->cache.true_cap, di->cache.true_fcc);
+		di->pub_soc = cap;
+	}
 }
 
 static int bq27x00_battery_get_property(struct power_supply *psy,
@@ -1292,8 +1349,18 @@ static int bq27x00_battery_get_property(struct power_supply *psy,
 		break;
 	case POWER_SUPPLY_PROP_CHARGE_NOW:
 		bq27x00_pick_published_model(di);
-		ret = bq27x00_simple_value(1000 * (di->pub_model ?
-				di->cache.true_cap : di->cache.remain_cap), val);
+		/* mAh coherentes con el % que publicamos: si el nivel esta capado por tension,
+		 * charge_now tiene que decir lo mismo; si no, BatteryStats calcula autonomia con
+		 * una cifra y la UI pinta otra (y el framework de energia se equivoca al predecir). */
+		if (di->pub_soc >= 0 && (di->pub_model ? di->cache.true_fcc
+						 : di->cache.full_charge_cap) > 0)
+			val->intval = 1000 * di->pub_soc *
+				(di->pub_model ? di->cache.true_fcc
+				 : di->cache.full_charge_cap) / 100;
+		else
+			val->intval = 1000 * (di->pub_model ?
+					di->cache.true_cap : di->cache.remain_cap);
+		ret = 0;
 		break;
 	case POWER_SUPPLY_PROP_CHARGE_FULL:
 		bq27x00_pick_published_model(di);
