@@ -440,6 +440,11 @@ MODULE_PARM_DESC(poll_interval, "battery poll interval in seconds - " \
 static int voltage_soc_cap = 1;
 module_param(voltage_soc_cap, int, 0644);
 MODULE_PARM_DESC(voltage_soc_cap, "cap the published SOC by the measured pack voltage");
+
+/* Elegir modelo de capacidad cuando el FCC leido es absurdo; ver bq27x00_pick_published_model(). */
+static int fcc_sanity = 1;
+module_param(fcc_sanity, int, 0644);
+MODULE_PARM_DESC(fcc_sanity, "reject a learned FCC implausible for the design capacity and publish the TRUE model instead");
 /*
  * Common code for BQ27x00 devices
  */
@@ -1206,6 +1211,7 @@ static void bq27x00_pick_published_model(struct bq27x00_device_info *di)
 	int gauge_soc = -1;
 	int true_soc = -1;
 	int cap;
+	int forzado = 0;
 
 	if (di->cache.full_charge_cap > 0 && di->cache.remain_cap >= 0)
 		gauge_soc = clamp_t(int, (100 * di->cache.remain_cap) /
@@ -1236,12 +1242,44 @@ static void bq27x00_pick_published_model(struct bq27x00_device_info *di)
 		return;
 	}
 
-	if (gauge_soc <= true_soc) {
-		di->pub_model = 0;
-		di->pub_soc = gauge_soc;
-	} else {
+	/*
+	 * Cual de los dos modelos de capacidad es creible.
+	 *
+	 * Este gauge es un BQ27520 (medido: device_type 0x0520 en
+	 * /sys/bus/i2c/devices/1-0055), pero el driver lo trata como BQ27500 y lee como "FCC" un
+	 * registro que en el BQ27520 no es la capacidad plena aprendida.  Lo que sale no se parece
+	 * a un FCC aprendido por Impedance Track: en el mismo pack ha dado 2806, 3366, 5322, 5771 y
+	 * 6150 mAh, con 6400 mAh de diseno y solo 5 ciclos.
+	 *
+	 * El modelo "true" si es autoconsistente: al terminar la carga, TRUECAP llega exactamente a
+	 * TRUECCAP (medido con el pack lleno: TRUECAP=TRUEFCC=5673 mAh, 110 mA de absorcion y
+	 * charge_counter ya estatico).  Es el unico numero con el que se puede calcular autonomia.
+	 *
+	 * Regla: si el FCC leido esta por debajo del 60 % del diseno mientras el TRUEFCC si esta en
+	 * rango creible (>= 60 % del diseno), publicamos el modelo TRUE; si no, se mantiene la regla
+	 * conservadora del minimo de los dos, que es la que evito el "55 % con brownout a 3,08 V".
+	 */
+	if (fcc_sanity && di->charge_design_full > 0 &&
+	    di->cache.full_charge_cap > 0 && di->cache.true_fcc > 0 &&
+	    di->cache.full_charge_cap * 5 < di->charge_design_full * 3 &&
+	    di->cache.true_fcc * 5 >= di->charge_design_full * 3) {
+		forzado = 1;
 		di->pub_model = 1;
 		di->pub_soc = true_soc;
+		dev_info_ratelimited(di->dev,
+			"bq27x00 FCC leido %d mAh es absurdo para %d mAh de diseno: publicamos el modelo TRUE (TRUEFCC=%d TRUECAP=%d -> %d%%) flag=%x\n",
+			di->cache.full_charge_cap, di->charge_design_full,
+			di->cache.true_fcc, di->cache.true_cap, true_soc, di->cache.flags);
+	}
+
+	if (!forzado) {
+		if (gauge_soc <= true_soc) {
+			di->pub_model = 0;
+			di->pub_soc = gauge_soc;
+		} else {
+			di->pub_model = 1;
+			di->pub_soc = true_soc;
+		}
 	}
 
 	if (abs(gauge_soc - true_soc) > 10)
