@@ -941,12 +941,30 @@ static long nvhost_channelctl(struct file *filp,
 			platform_get_drvdata(priv->ch->dev);
 		struct nvhost_get_param_arg *arg =
 			(struct nvhost_get_param_arg *)buf;
-		if (arg->param >= NVHOST_MODULE_MAX_WAITBASES
-				|| !pdata->waitbases[arg->param]) {
+		int base;
+
+		if (arg->param >= NVHOST_MODULE_MAX_WAITBASES) {
 			err = -EINVAL;
 			break;
 		}
-		arg->value = pdata->waitbases[arg->param];
+		if (pdata->waitbases[arg->param]) {
+			arg->value = pdata->waitbases[arg->param];
+			break;
+		}
+		/* mocha fix: this pdata carries no .waitbases (no t124 pdata does), which
+		 * used to make GET_WAITBASE a plain -EINVAL. Do what
+		 * NVHOST_IOCTL_CHANNEL_GET_SYNCPOINT above already does for syncpoints:
+		 * allocate one, remember it in pdata, hand it out. nvhost_alloc_waitbase()
+		 * only returns ids inside the host1x syncpt_base register window. */
+		base = nvhost_alloc_waitbase(priv->ch->dev);
+		if (base == NVSYNCPT_INVALID) {
+			err = -EAGAIN;
+			break;
+		}
+		pdata->waitbases[arg->param] = (u32)base;
+		arg->value = (u32)base;
+		dev_info(&priv->ch->dev->dev, "%s: allocated waitbase %d for %s[%u]\n",
+			__func__, base, priv->ch->dev->name, arg->param);
 		break;
 	}
 	case NVHOST_IOCTL_CHANNEL_GET_MODMUTEXES:

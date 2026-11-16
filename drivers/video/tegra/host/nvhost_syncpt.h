@@ -107,6 +107,13 @@ int nvhost_syncpt_nb_bases(struct nvhost_syncpt *sp);
 int nvhost_syncpt_nb_mlocks(struct nvhost_syncpt *sp);
 void nvhost_syncpt_set_manager(struct nvhost_syncpt *sp, int id, bool client);
 
+/*
+ * mocha: hand out a host1x syncpt_base id when the module's pdata carries no
+ * .waitbases table (see nvhost_syncpt.c for why this tree needs it). Returns
+ * NVSYNCPT_INVALID when no base slot is left. The id returned is always below
+ * nvhost_syncpt_nb_bases(), which is the host1x syncpt_base register window. */
+int nvhost_alloc_waitbase(struct platform_device *pdev);
+
 /**
  * Returns true if syncpoint min == max
  */

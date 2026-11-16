@@ -1195,6 +1195,59 @@ int nvhost_syncpt_nb_mlocks(struct nvhost_syncpt *sp)
 	return syncpt_to_dev(sp)->info.nb_mlocks;
 }
 
+/*
+ * mocha fix (2026-11-16): host1x waitbase ids are a global resource that this kernel
+ * never allocates. nvhost_device_data.waitbases[] is only ever filled from static pdata
+ * tables, and no t124 pdata defines one (t124_vi_info, t124_vib_info, t124_isp_info,
+ * t124_ispb_info, t124_vic_info, t124_msenc_info all leave .syncpts/.waitbases empty:
+ * grep '.waitbases' in drivers/video/tegra/host/t124/t124.c finds nothing). As a result
+ * NVHOST_IOCTL_CHANNEL_GET_WAITBASE answered -EINVAL to every user space driver on this
+ * SoC - measured 56 failures out of 56 calls, on /dev/camera.pcl, /dev/nvhost-isp and
+ * /dev/nvhost-vic. nvhost_syncpt_get_waitbase() then returns NVSYNCPT_INVALID,
+ * nvhost_cdma.c:343 skips nvhost_syncpt_cpu_set_wait_base(), and the 2015 blobs spin on
+ * their own semaphore printing 'Waiting on the syncpt semaphore failed 0x2'.
+ *
+ * A waitbase id indexes the host1x base register window (host1x_sync_syncpt_base_0_r()
+ * + id * 4), so it must stay below nvhost_syncpt_nb_bases() - measured 64 on this board
+ * (host1x capabilities/num_bases). Ids 0..5 are the ones the 2015 user space stack names
+ * by convention (NVWAITBASE_2D_0/1 = 1/2 for 2D/VIC on t20/t30/t114, NVWAITBASE_3D = 3,
+ * NVWAITBASE_MSENC = 4, NVWAITBASE_TSEC = 5 in t124/syncpt_t124.h), so allocation starts
+ * at 6 to avoid colliding with what the closed NVIDIA blobs already use.
+ */
+#define NVHOST_WAITBASE_MAX		128
+#define NVHOST_WAITBASE_FIRST_FREE	6
+
+static DEFINE_MUTEX(waitbase_alloc_lock);
+static DECLARE_BITMAP(waitbase_in_use, NVHOST_WAITBASE_MAX);
+
+int nvhost_alloc_waitbase(struct platform_device *pdev)
+{
+	struct nvhost_master *host = nvhost_get_host(pdev);
+	struct nvhost_syncpt *sp;
+	int nb;
+	int id;
+
+	if (!host)
+		return NVSYNCPT_INVALID;
+
+	sp = &host->syncpt;
+	nb = nvhost_syncpt_nb_bases(sp);
+	if (nb > NVHOST_WAITBASE_MAX)
+		nb = NVHOST_WAITBASE_MAX;
+
+	mutex_lock(&waitbase_alloc_lock);
+	for (id = NVHOST_WAITBASE_FIRST_FREE; id < nb; id++) {
+		if (test_bit(id, waitbase_in_use))
+			continue;
+		__set_bit(id, waitbase_in_use);
+		mutex_unlock(&waitbase_alloc_lock);
+		return id;
+	}
+	mutex_unlock(&waitbase_alloc_lock);
+	return NVSYNCPT_INVALID;
+}
+EXPORT_SYMBOL(nvhost_alloc_waitbase);
+
 void nvhost_syncpt_set_manager(struct nvhost_syncpt *sp, int id, bool client)
 {
 	sp->client_managed[id] = client;
