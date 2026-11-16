@@ -541,12 +541,18 @@ int nvmap_ioctl_rw_handle(struct file *filp, int is_read, void __user *arg,
 		if (copy_from_user(&op, arg, sizeof(op)))
 			return -EFAULT;
 
-	if (!op.addr || !op.count || !op.elem_size)
+	if (!op.addr || !op.count || !op.elem_size) {
+		if (atomic_dec_return(&mocha_rw_diag_left) >= 0)
+			pr_warn("mocha rw EINVAL: addr/count/elem_size con un 0 (addr=%lu count=%u elem_size=%u)\n",
+				op.addr, op.count, op.elem_size);
 		return -EINVAL;
+	}
 
 	h = unmarshal_user_handle(op.handle);
-	if (!h)
+	if (!h) {
+		mocha_rw_diag_handle(op.handle);
 		return -EINVAL;
+	}
 
 	trace_nvmap_ioctl_rw_handle(client, h, is_read, op.offset,
 				    op.addr, op.hmem_stride,
@@ -1009,6 +1015,42 @@ static int rw_handle_page(struct nvmap_handle *h, int is_read,
 	return err;
 }
 
+/*
+ * mocha diagnostic (2026-11-16, read only - it changes no decision):
+ * the stock JPEG encoder (libnvcam_imageencoder.so -> libnvtvmr.so) opens and closes
+ * its session immediately and the only thing it prints is 'NVMAP_IOC_WRITE failed:
+ * Invalid argument' (measured in camera.log lines 26784-26791 of the 2026-11-15 session:
+ * Encoder_Open ++ / Encoder_Close ++ / that line twice / 'doJpegEncoding -- (error 0x6)').
+ * -EINVAL on this path can only come from the checks below, and none of them says which
+ * one tripped or what the handle really looks like. Print geometry + handle size at most
+ * MOCHA_RW_DIAG_MAX times per boot, and only on an error path, so it cannot flood the
+ * log. Same for the two early -EINVAL returns of nvmap_ioctl_rw_handle().
+ */
+#define MOCHA_RW_DIAG_MAX 24
+static atomic_t mocha_rw_diag_left = ATOMIC_INIT(MOCHA_RW_DIAG_MAX);
+
+static void mocha_rw_diag(struct nvmap_handle *h, const char *clause,
+		unsigned long h_offs, unsigned long elem_size,
+		unsigned long h_stride, unsigned long sys_stride,
+		unsigned long count)
+{
+	if (atomic_dec_return(&mocha_rw_diag_left) < 0)
+		return;
+	pr_warn("mocha rw EINVAL: %s | handle=%p size=%zu orig=%zu alloc=%d pgalloc=%d heap=%u flags=0x%x userflags=0x%x kind=%u pin=%d ref=%d | offs=%lu elem=%lu hstride=%lu ustride=%lu count=%lu\n",
+		clause, h, h->size, h->orig_size, h->alloc, h->heap_pgalloc,
+		h->heap_type, h->flags, h->userflags, h->kind,
+		atomic_read(&h->pin), atomic_read(&h->ref),
+		h_offs, elem_size, h_stride, sys_stride, count);
+}
+
+static void mocha_rw_diag_handle(u32 token)
+{
+	if (atomic_dec_return(&mocha_rw_diag_left) < 0)
+		return;
+	pr_warn("mocha rw EINVAL: unmarshal_user_handle(%u) found no dma-buf behind that token - the value the 2015 blob passes as an nvmap handle is not a dmabuf fd of this process (unmarshal_user_handle() in this tree only calls nvmap_get_id_from_dmabuf_fd())\n",
+		token);
+}
+
 static ssize_t rw_handle(struct nvmap_client *client, struct nvmap_handle *h,
 			 int is_read, unsigned long h_offs,
 			 unsigned long sys_addr, unsigned long h_stride,
@@ -1038,8 +1080,25 @@ static ssize_t rw_handle(struct nvmap_client *client, struct nvmap_handle *h,
 		elem_size > sys_stride ||
 		elem_size > h_stride ||
 		sys_stride > (h->size - h_offs) / count ||
-		h_stride > (h->size - h_offs) / count)
+		h_stride > (h->size - h_offs) / count) {
+		const char *clause = "combinada (ninguna clausula individual)";
+
+		if (elem_size > h->size)
+			clause = "elem_size > h->size";
+		else if (h_offs >= h->size)
+			clause = "h_offs >= h->size";
+		else if (elem_size > sys_stride)
+			clause = "elem_size > user_stride";
+		else if (elem_size > h_stride)
+			clause = "elem_size > hmem_stride";
+		else if (sys_stride > (h->size - h_offs) / count)
+			clause = "user_stride > (size - offs) / count";
+		else if (h_stride > (h->size - h_offs) / count)
+			clause = "hmem_stride > (size - offs) / count";
+		mocha_rw_diag(h, clause, h_offs, elem_size, h_stride, sys_stride,
+				count);
 		return -EINVAL;
+	}
 
 	area = alloc_vm_area(PAGE_SIZE, NULL);
 	if (!area)
