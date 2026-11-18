@@ -511,6 +511,22 @@ ref_fail:
 	return err;
 }
 
+/*
+ * Los diagnosticos acotados de NVMAP_IOC_WRITE estan definidos mas abajo, cerca de rw_handle(),
+ * pero nvmap_ioctl_rw_handle() los necesita desde su primera comprobacion.  Sin estas
+ * declaraciones por delante el kernel no compila: 'mocha_rw_diag_left' undeclared y 'implicit
+ * declaration of function mocha_rw_diag_handle'.  Corregido el 2026-11-18, al compilar el kernel
+ * completo por primera vez con ellos (hasta ahora solo se habian construido con el script
+ * construir_kernel_mocha.sh y nunca llegaron a un 'make droid').
+ */
+#define MOCHA_RW_DIAG_MAX 24
+static atomic_t mocha_rw_diag_left = ATOMIC_INIT(MOCHA_RW_DIAG_MAX);
+static void mocha_rw_diag(struct nvmap_handle *h, const char *clause,
+		unsigned long h_offs, unsigned long elem_size,
+		unsigned long h_stride, unsigned long sys_stride,
+		unsigned long count);
+static void mocha_rw_diag_handle(u32 token);
+
 int nvmap_ioctl_rw_handle(struct file *filp, int is_read, void __user *arg,
 			  bool is32)
 {
@@ -1026,9 +1042,8 @@ static int rw_handle_page(struct nvmap_handle *h, int is_read,
  * MOCHA_RW_DIAG_MAX times per boot, and only on an error path, so it cannot flood the
  * log. Same for the two early -EINVAL returns of nvmap_ioctl_rw_handle().
  */
-#define MOCHA_RW_DIAG_MAX 24
-static atomic_t mocha_rw_diag_left = ATOMIC_INIT(MOCHA_RW_DIAG_MAX);
-
+/* MOCHA_RW_DIAG_MAX y mocha_rw_diag_left se declaran donde los usa nvmap_ioctl_rw_handle();
+ * aqui van las definiciones de las dos funciones de ayuda. */
 static void mocha_rw_diag(struct nvmap_handle *h, const char *clause,
 		unsigned long h_offs, unsigned long elem_size,
 		unsigned long h_stride, unsigned long sys_stride,
