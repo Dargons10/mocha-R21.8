@@ -3259,7 +3259,34 @@ static int ov5693_open(struct inode *inode, struct file *file)
 	dev_dbg(&info->i2c_client->dev, "%s\n", __func__);
 
 	err = ov5693_power_on(info, false);
-	return err;
+	if (err) {
+		/*
+		 * mocha K-73, medido 2026-11-20 en 4B93A59F: si power_on falla, el contador in_use se
+		 * queda en 1 y open() ya no vuelve a tener exito nunca.  open() devuelve error, o sea el
+		 * kernel NO crea struct file, o sea release() no corre jamas y atomic_xchg(&info->in_use, 0)
+		 * de release no se ejecuta: el sensor frontal queda bloqueado hasta reiniciar el tablet.
+		 * Desde ese momento toda apertura sale en el HAL de 2015 con:
+		 *   'OV5693 ****  Can not open camera device: Device or resource busy'
+		 *   'ERROR: Failed to power on the sensor.'
+		 *   'NvOdm driver did not provide sensor FuseID'  ->  'getStaticInfo-- error [0x8]'
+		 *   'CamDev@3.2-impl: open: cannot open camera 1!'  ->  'Invalid argument (-22)'
+		 * y la app de camara muestra 'Error de camara / No se puede establecer conexion con la
+		 * camara'.  Comparado con imx179_open (camara trasera, linea 979 del mismo directorio):
+		 * ahi el open NO enciende el sensor, por eso la trasera nunca se bloquea.  Detalle en
+		 * device/xiaomi/mocha/docs/K-72-fuga-descriptor-sensor.md
+		 *
+		 * Sin esto, el descriptor filtrado y el contador quedan inconsistentes: el barrido
+		 * de descriptores del envoltorio (K-72, camera/Camera3Wrapper.cpp) puede cerrar un fd del
+		 * sensor, pero un in_use pegado sin fd no se puede recuperar desde usuariospace.
+		 */
+		pr_info("%s: power_on fallo (%d); se deshace in_use para no bloquear el sensor\n",
+			__func__, err);
+		file->private_data = NULL;
+		atomic_set(&info->in_use, 0);
+		ov5693_power_off(info);
+		return err;
+	}
+	return 0;
 }
 
 int ov5693_release(struct inode *inode, struct file *file)
