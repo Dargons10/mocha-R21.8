@@ -219,6 +219,43 @@ int nvhost_channel_map(struct nvhost_device_data *pdata,
 	/* Check if already channel(s) assigned for device */
 	if (pdata->num_channels == pdata->num_mapped_chs) {
 		if (pdata->exclusive) {
+			/*
+			 * mocha K-76a, medido 2026-11-20 en mocha (T124).  Este retorno era
+			 * completamente silencioso, y es el origen de toda la cadena que dejaba la
+			 * camara inservible hasta reiniciar la tableta:
+			 *   'Opening channel /dev/nvhost-vi (0xc) failed'        (blob de 2015)
+			 *   '__nvhost_channelopen: failed to map channel, -16'   (-EBUSY, aqui)
+			 *   'camera3_device_open fallo con -22'                  (envoltorio)
+			 *   'Camera3-Device: initialize: Could not open camera session: -22'
+			 * En t124 los modulos de camara se declaran con .num_channels = 1 y
+			 * .exclusive = true, asi que SOLO un cliente puede tener el canal mapeado.
+			 * num_mapped_chs baja en nvhost_channel_unmap_locked, que solo se llama
+			 * cuando nvhost_putchannel deja refcount en 0; host1x_channel_submit toma
+			 * job->num_syncpts referencias por submit y las devuelve al completar el job
+			 * (nvhost_intr_alloc_waiter / nvhost_putchannel).  Si el syncpoint del job no
+			 * avanza nunca --lo vimos: 'cdma_timeout_handler: timeout: 22 (vi.0_2)' y el
+			 * flood 'Waiting on the syncpt semaphore failed 0x2'-- la referencia queda
+			 * colgada y el dispositivo exclusivo queda ciego para siempre.
+			 * Imprimimos el estado para poder medirlo desde el log en vez de deducirlo.
+			 */
+			unsigned int mocha_ch;
+			for (mocha_ch = 0; mocha_ch < (unsigned int)pdata->num_channels;
+					mocha_ch++) {
+				struct nvhost_channel *ocupado = pdata->channels[mocha_ch];
+				if (!ocupado)
+					continue;
+				dev_err(&pdata->pdev->dev,
+					"mocha K-76a: %s exclusivo ocupado; canal %u chid %d refcount %d cur_ctx %pK cdma: slots_used %u first_get 0x%x last_put 0x%x running %d torndown %d\n",
+					dev_name(&pdata->pdev->dev), mocha_ch, ocupado->chid,
+					ocupado->refcount, ocupado->cur_ctx,
+					ocupado->cdma.slots_used, ocupado->cdma.first_get,
+					ocupado->cdma.last_put, ocupado->cdma.running,
+					ocupado->cdma.torndown);
+			}
+			dev_err(&pdata->pdev->dev,
+				"mocha K-76a: %s num_channels=%d num_mapped_chs=%d exclusive=%d keepalive=%d\n",
+				dev_name(&pdata->pdev->dev), pdata->num_channels,
+				pdata->num_mapped_chs, pdata->exclusive, pdata->keepalive);
 			mutex_unlock(&host->chlist_mutex);
 			return -EBUSY;
 		}
