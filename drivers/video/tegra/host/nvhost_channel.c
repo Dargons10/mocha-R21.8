@@ -29,7 +29,7 @@
 #include <linux/nvhost_ioctl.h>
 #include <linux/nvhost.h>
 #include <linux/slab.h>
-/* mocha K-76b: includes explicitos para ktime, jiffies, atomic y lista (usados en el rescate). */
+/* mocha K-76b: includes explicitos para el rescate y su boton sysfs. */
 #include <linux/init.h>
 #include <linux/kernel.h>
 #include <linux/ktime.h>
@@ -37,6 +37,9 @@
 #include <linux/atomic.h>
 #include <linux/spinlock.h>
 #include <linux/list.h>
+#include <linux/string.h>
+#include <linux/kobject.h>
+#include <linux/sysfs.h>
 
 /* mocha K-76b: el envoltorio publico llama al cuerpo interno con el marcador de reintento. */
 static int nvhost_channel_map_interno(struct nvhost_device_data *pdata,
@@ -228,16 +231,91 @@ static int nvhost_channel_unmap_locked(struct nvhost_channel *ch)
  * 'funcionaba en el arranque, tras el reinicio ya no': el reinicio limpia el estado del kernel, el
  * probe vuelve a dejar el canal mapeado y la primera apertura posterior devuelve -EBUSY.
  *
- * Este codigo libera la referencia colgada SOLO cuando hay prueba suficiente de que el trabajo
- * murio: el canal no tiene contexto dueno (cur_ctx == NULL), hay una entrada en la cola de
- * sincronizacion pendiente y han pasado MAS DE DOS VECIAS el plazo del timeout del CDMA desde que
- * se armo (cdma.timeout.start_ktime). Con una sesion sana la cola se vacia y el trabajo del timeout
- * se cancela, asi que nunca se rescata un canal en uso legitimo. Se limita a 5 rescates por ventana
- * de 30 s para no enmascarar un fallo de hardware permanente.
+ * REVISTA DEL INTENTO ANTERIOR (medido el 2026-11-21, hay que dejarlo escrito):
+ * La primera version del rescate se disparaba cuando el trabajo pendiente llevaba dos plazos de
+ * timeout vencidos, SIN mirar si el CDMA seguia cargando. Con el estado real que se midio
+ * ('running 1', 'slots_used 2', cola de sincronizacion llena) eso llamaba a nvhost_putchannel ->
+ * nvhost_channel_unmap_locked -> channel_cdma_op().stop + nvhost_cdma_deinit, que libera el
+ * pushbuffer MIENTRAS el DMA de host1x todavia lo esta leyendo. Resultado: el kernel se colgo a
+ * media arranque y el LK se queda en APX / fastboot. Recuperable escribiendo el bloque bueno con
+ * 'fastboot flash boot' (en este LK la particion se llama 'boot', NO 'LNX').
  *
- * Boton de arranque: mocha_k76b=0 en la linea de mando lo desactiva (por defecto activado).
+ * Por eso el rescate exige, TODOS a la vez:
+ *   - cdma.running == false        : el DMA del canal esta parado (nadie leyendo el pushbuffer)
+ *   - sync_queue vacia             : no queda ningun trabajo en vuelo
+ *   - cur_ctx == NULL              : ningun cliente es dueno del contexto del canal
+ *   - refcount > 0                 : queda la referencia colgada que hay que soltar
+ *   - el nombre del dispositivo empieza por 'vi' o 'isp' (solo los modulos de camara, que son los
+ *     exclusivos con num_channels = 1; no se toca gr2d, vic, tsec, ni nvjpg)
+ *   - el sistema ya termino de arrancar (mocha_pronto, puesto por un late_initcall): durante el
+ *     probe hay contextos en los que no se puede dormir ni desmapear, y ahi NO se rescata.
+ * Soltar la referencia con el CDMA parado y la cola vacia es exactamente el camino de cierre
+ * normal (nvhost_channel_release usa nvhost_putchannel), asi que no se libera memoria en uso.
+ * Se limita a 5 rescates por ventana de 30 s para no enmascarar un fallo de hardware permanente.
+ *
+ * BOTON, y esta vez con red de seguridad ✓: nace DESACTIVADO. Se enciende desde userspace con
+ *   echo 1 > /sys/kernel/mocha_k76b/enable
+ * o por linea de mando con mocha_k76b=1, que es como se dejara activo una vez medido que funciona.
+ * Motivo, medido el 2026-11-21: la primera version del rescate colgo el arranque y hubo que volver
+ * al bloque bueno por fastboot. Con el boton apagado por defecto, un fallo en el rescate no puede
+ * impedir arrancar: el kernel se comporta como el K-76a (camera bloqueada hasta reiniciar, eso si).
  */
-static int mocha_k76b = 1;
+static int mocha_k76b;
+
+/* true a partir de late_initcall: durante el arranque no se rescata nada. */
+static bool mocha_pronto;
+
+static ssize_t mocha_k76b_show(struct kobject *kobj, struct kobj_attribute *attr,
+				   char *buf)
+{
+	return sprintf(buf, "%d\n", mocha_k76b);
+}
+
+static ssize_t mocha_k76b_store(struct kobject *kobj, struct kobj_attribute *attr,
+				const char *buf, size_t count)
+{
+	int valor;
+
+	if (kstrtoint(buf, 0, &valor))
+		return -EINVAL;
+	mocha_k76b = !!valor;
+	pr_info("mocha K-76b: rescate de canal exclusivo %s desde /sys\n",
+		mocha_k76b ? "activado" : "desactivado");
+	return count;
+}
+static struct kobj_attribute mocha_k76b_attr_enable =
+	__ATTR(enable, 0644, mocha_k76b_show, mocha_k76b_store);
+
+static struct attribute *mocha_k76b_attrs[] = {
+	&mocha_k76b_attr_enable.attr,
+	NULL,
+};
+
+static struct attribute_group mocha_k76b_group = {
+	.attrs = mocha_k76b_attrs,
+};
+
+static struct kobject *mocha_k76b_kobj;
+
+static int __init mocha_k76b_late_init(void)
+{
+	mocha_k76b_kobj = kobject_create_and_add("mocha_k76b", kernel_kobj);
+	if (mocha_k76b_kobj) {
+		if (sysfs_create_group(mocha_k76b_kobj, &mocha_k76b_group)) {
+			kobject_put(mocha_k76b_kobj);
+			mocha_k76b_kobj = NULL;
+		} else {
+			pr_info("mocha K-76b: boton en /sys/kernel/mocha_k76b/enable "
+				"(estado actual %d)\n", mocha_k76b);
+		}
+	} else {
+		pr_info("mocha K-76b: no se pudo crear el boton /sys (estado actual %d)\n",
+			mocha_k76b);
+	}
+	mocha_pronto = true;
+	return 0;
+}
+late_initcall(mocha_k76b_late_init);
 
 static int __init mocha_k76b_setup(char *s)
 {
@@ -271,15 +349,19 @@ static bool mocha_k76b_permitido(void)
 }
 
 /*
- * true solo si el canal esta mapeado, sin contexto dueno, con trabajo pendiente y con el plazo del
- * timeout del CDMA ampliamente vencido. Nota: en t124 hay modulos sin hwctx para los que cur_ctx es
- * NULL siempre, por eso la edad del trabajo pendiente es la condicion que manda.
+ * true solo si el canal esta mapeado, sin dueno de contexto, CON EL DMA PARADO y la cola de
+ * trabajos vacia. Ese es el estado 'referencia colgada sin trabajo vivo' que deja el
+ * cdma_timeout_handler despues de 'nvhost_cdma_update_sync_queue'; solo ahi es seguro desmapear.
+ * Si running sigue a true o queda algo en la cola, se devuelve false y se deja el -EBUSY tal cual:
+ * preferimos la camara inoperativa hasta reiniciar antes que liberar un pushbuffer en uso.
  */
-static bool mocha_canal_huerfano(struct nvhost_channel *ch)
+static bool mocha_canal_huerfano(struct nvhost_device_data *pdata,
+				struct nvhost_channel *ch)
 {
-	struct nvhost_cdma *cdma;
-	s64 edad_ms;
+	const char *nombre;
 
+	if (!mocha_pronto)
+		return false;
 	if (!ch || !ch->dev || ch->chid == NVHOST_INVALID_CHANNEL)
 		return false;
 	if (ch->refcount <= 0)
@@ -287,45 +369,35 @@ static bool mocha_canal_huerfano(struct nvhost_channel *ch)
 	if (ch->cur_ctx)
 		return false;
 
-	cdma = &ch->cdma;
-	if (!cdma->timeout.initialized)
-		return false;
-	if (list_empty(&cdma->sync_queue))
-		return false;
-
-	edad_ms = ktime_to_ms(ktime_sub(ktime_get(), cdma->timeout.start_ktime));
-	if (edad_ms <= 0)
+	/* Solo los modulos de camara (vi.0 / vi.1 / isp.0 / isp.1). */
+	nombre = dev_name(&pdata->pdev->dev);
+	if (strncmp(nombre, "vi", 2) != 0 && strncmp(nombre, "isp", 3) != 0)
 		return false;
 
-	return edad_ms > (s64)cdma->timeout.timeout * 2;
+	/* El DMA tiene que estar parado y sin trabajos en vuelo: condicion de seguridad. */
+	if (ch->cdma.running)
+		return false;
+	if (!list_empty(&ch->cdma.sync_queue))
+		return false;
+
+	return true;
 }
 
 /*
  * Suelta la referencia colgada. Debe llamarse SIN sujetar host->chlist_mutex, porque
- * nvhost_putchannel toma ese mismo mutex. Primero intenta vaciar la cola con un plazo corto: si el
- * trabajo termina, las referencias se sueltan solas y no tocamos nada.
+ * nvhost_putchannel toma ese mismo mutex. No se hace ninguna espera: si el CDMA estuviera cargando
+ * no habriamos llegado aqui (mocha_canal_huerfano lo impide).
  */
 static void mocha_rescatar_canal(struct nvhost_device_data *pdata,
 				struct nvhost_channel *ch)
 {
-	int ref_initial;
-	int flush;
+	int ref_initial = ch->refcount;
 
-	ref_initial = ch->refcount;
 	dev_err(&pdata->pdev->dev,
-		"mocha K-76b: %s rescate del canal %d (chid %d) refcount %d cur_ctx %pK cdma: slots_used %u first_get 0x%x last_put 0x%x running %d torndown %d; trabajo pendiente vencido\n",
+		"mocha K-76b: %s rescate del canal %d (chid %d) refcount %d cur_ctx %pK cdma: slots_used %u first_get 0x%x last_put 0x%x running %d torndown %d; DMA parado y cola vacia\n",
 		dev_name(&pdata->pdev->dev), ch->dev_chid, ch->chid, ch->refcount, ch->cur_ctx,
 		ch->cdma.slots_used, ch->cdma.first_get, ch->cdma.last_put, ch->cdma.running,
 		ch->cdma.torndown);
-
-	flush = nvhost_cdma_flush(&ch->cdma, 500);
-	if (flush == 0) {
-		dev_info(&pdata->pdev->dev,
-			"mocha K-76b: %s la cola se vacio sola; refcount ahora %d\n",
-			dev_name(&pdata->pdev->dev), ch->refcount);
-		if (ch->refcount <= 0)
-			return;
-	}
 
 	if (ch->refcount > 0) {
 		nvhost_putchannel(ch, ch->refcount);
@@ -398,7 +470,7 @@ static int nvhost_channel_map_interno(struct nvhost_device_data *pdata,
 					ocupado->cdma.slots_used, ocupado->cdma.first_get,
 					ocupado->cdma.last_put, ocupado->cdma.running,
 					ocupado->cdma.torndown);
-				if (mocha_canal_huerfano(ocupado))
+				if (mocha_canal_huerfano(pdata, ocupado))
 					huerfano = ocupado;
 			}
 			dev_err(&pdata->pdev->dev,
