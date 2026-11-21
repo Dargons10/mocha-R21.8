@@ -29,6 +29,18 @@
 #include <linux/nvhost_ioctl.h>
 #include <linux/nvhost.h>
 #include <linux/slab.h>
+/* mocha K-76b: includes explicitos para ktime, jiffies, atomic y lista (usados en el rescate). */
+#include <linux/init.h>
+#include <linux/kernel.h>
+#include <linux/ktime.h>
+#include <linux/jiffies.h>
+#include <linux/atomic.h>
+#include <linux/spinlock.h>
+#include <linux/list.h>
+
+/* mocha K-76b: el envoltorio publico llama al cuerpo interno con el marcador de reintento. */
+static int nvhost_channel_map_interno(struct nvhost_device_data *pdata,
+			struct nvhost_channel **channel, int ya_rescatado);
 
 #define NVHOST_CHANNEL_LOW_PRIO_MAX_WAIT 50
 
@@ -196,9 +208,143 @@ static int nvhost_channel_unmap_locked(struct nvhost_channel *ch)
 	return 0;
 }
 
+/*
+ * mocha K-76b (2026-11-21): rescate del canal exclusivo huerfano.
+ *
+ * Prueba medida en mocha (T124), arranque del 2026-11-21 registrada en s.log:
+ *   19:22:09  'vi.0: nvhost_channelctl: allocated waitbase 7 for vi.0[0]'   (probe/power_on de
+ *             imx179 y ov5693: el kernel asigna y mapea los canales VI/ISP al arrancar)
+ *   19:25:56  'bq27x00 BMS ... v 3831000 i -294000'   (bateria SANA y cargando: el fallo NO es
+ *             electrico en este punto)
+ *   19:26:35  'mocha K-76a: vi.1 exclusivo ocupado; canal 0 chid 10 refcount 1 cur_ctx 00000000
+ *             cdma: slots_used 2 ... running 1 torndown 0'  +  num_mapped_chs=1 exclusive=1
+ *             keepalive=1'
+ *   19:26:35  '__nvhost_channelopen: failed to map channel, error: -16'   (-EBUSY)
+ *   19:26:44  'cdma_timeout_handler: timeout: 22 (vi.1_2) ctx 0xdb663800, HW thresh 0, done 1'
+ *   19:26:57  'Camera 0: initialize: Could not open camera session: Invalid argument (-22)'
+ * Es decir: el trabajo que tomo la referencia del canal exclusivo nunca cerro, el desmapeo solo
+ * ocurre cuando refcount llega a 0 (nvhost_putchannel -> nvhost_channel_unmap_locked) y por tanto
+ * el dispositivo de camara quedaba ciego para siempre. Eso es lo que explica el patron del usuario
+ * 'funcionaba en el arranque, tras el reinicio ya no': el reinicio limpia el estado del kernel, el
+ * probe vuelve a dejar el canal mapeado y la primera apertura posterior devuelve -EBUSY.
+ *
+ * Este codigo libera la referencia colgada SOLO cuando hay prueba suficiente de que el trabajo
+ * murio: el canal no tiene contexto dueno (cur_ctx == NULL), hay una entrada en la cola de
+ * sincronizacion pendiente y han pasado MAS DE DOS VECIAS el plazo del timeout del CDMA desde que
+ * se armo (cdma.timeout.start_ktime). Con una sesion sana la cola se vacia y el trabajo del timeout
+ * se cancela, asi que nunca se rescata un canal en uso legitimo. Se limita a 5 rescates por ventana
+ * de 30 s para no enmascarar un fallo de hardware permanente.
+ *
+ * Boton de arranque: mocha_k76b=0 en la linea de mando lo desactiva (por defecto activado).
+ */
+static int mocha_k76b = 1;
+
+static int __init mocha_k76b_setup(char *s)
+{
+	mocha_k76b = simple_strtol(s, NULL, 0);
+	pr_info("mocha K-76b: rescate de canal exclusivo %s por linea de mando\n",
+		mocha_k76b ? "activado" : "desactivado");
+	return 1;
+}
+__setup("mocha_k76b=", mocha_k76b_setup);
+
+static atomic_t mocha_k76b_rescates = ATOMIC_INIT(0);
+static unsigned long mocha_k76b_ventana;
+static DEFINE_SPINLOCK(mocha_k76b_candado);
+
+/* Devuelve true si queda cupo de rescate en la ventana en curso. */
+static bool mocha_k76b_permitido(void)
+{
+	unsigned long flags;
+	bool cupo = false;
+
+	spin_lock_irqsave(&mocha_k76b_candado, flags);
+	if (mocha_k76b_ventana == 0 || time_after(jiffies, mocha_k76b_ventana)) {
+		mocha_k76b_ventana = jiffies + msecs_to_jiffies(30000);
+		atomic_set(&mocha_k76b_rescates, 0);
+	}
+	if (atomic_inc_return(&mocha_k76b_rescates) <= 5)
+		cupo = true;
+	spin_unlock_irqrestore(&mocha_k76b_candado, flags);
+
+	return cupo;
+}
+
+/*
+ * true solo si el canal esta mapeado, sin contexto dueno, con trabajo pendiente y con el plazo del
+ * timeout del CDMA ampliamente vencido. Nota: en t124 hay modulos sin hwctx para los que cur_ctx es
+ * NULL siempre, por eso la edad del trabajo pendiente es la condicion que manda.
+ */
+static bool mocha_canal_huerfano(struct nvhost_channel *ch)
+{
+	struct nvhost_cdma *cdma;
+	s64 edad_ms;
+
+	if (!ch || !ch->dev || ch->chid == NVHOST_INVALID_CHANNEL)
+		return false;
+	if (ch->refcount <= 0)
+		return false;
+	if (ch->cur_ctx)
+		return false;
+
+	cdma = &ch->cdma;
+	if (!cdma->timeout.initialized)
+		return false;
+	if (list_empty(&cdma->sync_queue))
+		return false;
+
+	edad_ms = ktime_to_ms(ktime_sub(ktime_get(), cdma->timeout.start_ktime));
+	if (edad_ms <= 0)
+		return false;
+
+	return edad_ms > (s64)cdma->timeout.timeout * 2;
+}
+
+/*
+ * Suelta la referencia colgada. Debe llamarse SIN sujetar host->chlist_mutex, porque
+ * nvhost_putchannel toma ese mismo mutex. Primero intenta vaciar la cola con un plazo corto: si el
+ * trabajo termina, las referencias se sueltan solas y no tocamos nada.
+ */
+static void mocha_rescatar_canal(struct nvhost_device_data *pdata,
+				struct nvhost_channel *ch)
+{
+	int ref_initial;
+	int flush;
+
+	ref_initial = ch->refcount;
+	dev_err(&pdata->pdev->dev,
+		"mocha K-76b: %s rescate del canal %d (chid %d) refcount %d cur_ctx %pK cdma: slots_used %u first_get 0x%x last_put 0x%x running %d torndown %d; trabajo pendiente vencido\n",
+		dev_name(&pdata->pdev->dev), ch->dev_chid, ch->chid, ch->refcount, ch->cur_ctx,
+		ch->cdma.slots_used, ch->cdma.first_get, ch->cdma.last_put, ch->cdma.running,
+		ch->cdma.torndown);
+
+	flush = nvhost_cdma_flush(&ch->cdma, 500);
+	if (flush == 0) {
+		dev_info(&pdata->pdev->dev,
+			"mocha K-76b: %s la cola se vacio sola; refcount ahora %d\n",
+			dev_name(&pdata->pdev->dev), ch->refcount);
+		if (ch->refcount <= 0)
+			return;
+	}
+
+	if (ch->refcount > 0) {
+		nvhost_putchannel(ch, ch->refcount);
+		dev_err(&pdata->pdev->dev,
+			"mocha K-76b: %s liberadas %d referencia(s) colgadas; refcount ahora %d, canal desmapeado %s\n",
+			dev_name(&pdata->pdev->dev), ref_initial, ch->refcount,
+			ch->dev ? "NO" : "SI");
+	}
+}
+
 /* Maps free channel with device */
 int nvhost_channel_map(struct nvhost_device_data *pdata,
 			struct nvhost_channel **channel)
+{
+	return nvhost_channel_map_interno(pdata, channel, 0);
+}
+
+static int nvhost_channel_map_interno(struct nvhost_device_data *pdata,
+			struct nvhost_channel **channel, int ya_rescatado)
 {
 	struct nvhost_master *host = NULL;
 	struct nvhost_channel *ch = NULL;
@@ -219,6 +365,7 @@ int nvhost_channel_map(struct nvhost_device_data *pdata,
 	/* Check if already channel(s) assigned for device */
 	if (pdata->num_channels == pdata->num_mapped_chs) {
 		if (pdata->exclusive) {
+			struct nvhost_channel *huerfano = NULL;	/* mocha K-76b */
 			/*
 			 * mocha K-76a, medido 2026-11-20 en mocha (T124).  Este retorno era
 			 * completamente silencioso, y es el origen de toda la cadena que dejaba la
@@ -251,12 +398,31 @@ int nvhost_channel_map(struct nvhost_device_data *pdata,
 					ocupado->cdma.slots_used, ocupado->cdma.first_get,
 					ocupado->cdma.last_put, ocupado->cdma.running,
 					ocupado->cdma.torndown);
+				if (mocha_canal_huerfano(ocupado))
+					huerfano = ocupado;
 			}
 			dev_err(&pdata->pdev->dev,
 				"mocha K-76a: %s num_channels=%d num_mapped_chs=%d exclusive=%d keepalive=%d\n",
 				dev_name(&pdata->pdev->dev), pdata->num_channels,
 				pdata->num_mapped_chs, pdata->exclusive, pdata->keepalive);
 			mutex_unlock(&host->chlist_mutex);
+
+			/* mocha K-76b: si el dueno del canal esta muerto, se rescata y se reintenta. */
+			if (huerfano && mocha_k76b && !ya_rescatado && mocha_k76b_permitido()) {
+				int reintento;
+
+				mocha_rescatar_canal(pdata, huerfano);
+				reintento = nvhost_channel_map_interno(pdata, channel, 1);
+				if (reintento == 0) {
+					dev_info(&pdata->pdev->dev,
+						"mocha K-76b: %s canal disponible tras el rescate\n",
+						dev_name(&pdata->pdev->dev));
+					return 0;
+				}
+				dev_err(&pdata->pdev->dev,
+					"mocha K-76b: %s el reintento tras el rescate fallo (%d)\n",
+					dev_name(&pdata->pdev->dev), reintento);
+			}
 			return -EBUSY;
 		}
 		ch = nvhost_check_channel(pdata);
@@ -410,8 +576,23 @@ void nvhost_getchannel(struct nvhost_channel *ch)
 
 void nvhost_putchannel(struct nvhost_channel *ch, int cnt)
 {
-	struct nvhost_device_data *pdata = platform_get_drvdata(ch->dev);
-	struct nvhost_master *host = nvhost_get_host(pdata->pdev);
+	struct nvhost_device_data *pdata;
+	struct nvhost_master *host;
+
+	/*
+	 * mocha K-76b: defensivo. Tras un rescate del canal exclusivo el trabajo que expiro puede
+	 * completar despues y volver a llamar aqui sobre un canal ya desmapeado; en ese caso
+	 * ch->dev es NULL y platform_get_drvdata() habria seguido un puntero nulo. Se registra y se
+	 * sale sin tocar nada, que es lo que hacia el codigo original cuando el canal ya estaba
+	 * libre (nvhost_channel_unmap_locked imprimia 'freeing unmapped channel').
+	 */
+	if (!ch || !ch->dev) {
+		pr_warn("mocha K-76b: nvhost_putchannel sobre canal sin dispositivo, ignorado\n");
+		return;
+	}
+
+	pdata = platform_get_drvdata(ch->dev);
+	host = nvhost_get_host(pdata->pdev);
 
 	mutex_lock(&host->chlist_mutex);
 	ch->refcount -= cnt;
@@ -419,8 +600,14 @@ void nvhost_putchannel(struct nvhost_channel *ch, int cnt)
 	/* WARN on negative reference, with zero reference unmap channel*/
 	if (!ch->refcount)
 		nvhost_channel_unmap_locked(ch);
-	else if (ch->refcount < 0)
-		WARN_ON(1);
+	else if (ch->refcount < 0) {
+		/* mocha K-76b: se acota a cero en vez de dejar el contador negativo y enmudecer. */
+		dev_warn(&ch->dev->dev,
+			"mocha K-76b: refcount negativo (%d) en canal %d; se fija a 0\n",
+			ch->refcount, ch->chid);
+		ch->refcount = 0;
+		nvhost_channel_unmap_locked(ch);
+	}
 	mutex_unlock(&host->chlist_mutex);
 }
 
