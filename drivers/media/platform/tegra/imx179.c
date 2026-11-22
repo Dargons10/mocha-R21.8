@@ -304,6 +304,94 @@ static struct imx179_reg *mode_table[] = {
 	[IMX179_MODE_1280X720_90FPS] = mode_1280x720_90fps,
 };
 
+/* K-78: perilla del modo del sensor.
+ *
+ * Por que hace falta (medido 2026-11-22): el video graba a ~12 fps reales de los 15 pedidos
+ * (83/81/80 % en tres medidas independientes, con energia sana) y NUNCA llega a 15.  El camino que
+ * se atasca es la lectura del sensor: el PCL pide siempre la talla grande, mode_3280x2460 (8 MP),
+ * y ese readout esta justo al limite de los 15 fps.  El driver YA tiene mode_1280x720_90fps, seis
+ * veces mas rapido de lectura, pero nadie se lo pide: imx179_set_mode() solo elige tabla segun la
+ * talla que llega por ioctl (IMX179_IOCTL_SET_MODE).
+ *
+ * La perilla reescribe la talla pedida dentro del driver.  Por defecto 'auto': no se cambia nada y
+ * el comportamiento es exactamente el de fabrica (cero riesgo).
+ *
+ *   cat  /sys/bus/i2c/devices/<bus>-0020/imx179_mode
+ *   echo auto      > /sys/bus/i2c/devices/<bus>-0020/imx179_mode   # fabrica
+ *   echo 1280x720  > ...                                           # modo de 90 fps (video)
+ *   echo 3280x2460 > ...                                           # modo de 8 MP (foto)
+ *
+ * Coste mientras este forzada a 720p: la foto deja de ser de 8 MP.  Por eso es perilla, no cambio
+ * fijo.  Riesgo conocido: el PCL configura Vi/Isp para la talla que pidio, asi que forzar otro modo
+ * puede dar imagen mal recortada; se comprueba con el banco y se vuelve a 'auto' si molesta.
+ */
+static const struct imx179_size_map {
+	u32 xres;
+	u32 yres;
+	int idx;
+} imx179_size_map[] = {
+	{3280, 2460, IMX179_MODE_3280X2460},
+	{1920, 1080, IMX179_MODE_1920X1080},
+	{1280,  720, IMX179_MODE_1280X720_90FPS},
+};
+
+static int imx179_forced_mode = -1;	/* -1 = auto: se usa lo que pide el PCL */
+
+static int imx179_mode_from_text(const char *txt)
+{
+	int i;
+
+	if (!txt)
+		return -EINVAL;
+	if (!strncasecmp(txt, "auto", 4) || !strncasecmp(txt, "off", 3))
+		return -1;
+	for (i = 0; i < ARRAY_SIZE(imx179_size_map); i++) {
+		char want[16];
+
+		snprintf(want, sizeof(want), "%ux%u",
+			 imx179_size_map[i].xres, imx179_size_map[i].yres);
+		if (!strncasecmp(txt, want, strlen(want)))
+			return imx179_size_map[i].idx;
+	}
+	return -EINVAL;
+}
+
+static ssize_t imx179_mode_show(struct device *dev,
+	struct device_attribute *attr, char *buf)
+{
+	struct imx179_info *info = dev_get_drvdata(dev);
+	int i;
+
+	if (imx179_forced_mode < 0)
+		return snprintf(buf, PAGE_SIZE,
+			"auto (talla pedida por el PCL; modo del sensor en uso %d)\n",
+			info ? info->mode : -1);
+	for (i = 0; i < ARRAY_SIZE(imx179_size_map); i++)
+		if (imx179_size_map[i].idx == imx179_forced_mode)
+			return snprintf(buf, PAGE_SIZE, "%ux%u (forzado; modo en uso %d)\n",
+				imx179_size_map[i].xres, imx179_size_map[i].yres,
+				info ? info->mode : -1);
+	return snprintf(buf, PAGE_SIZE, "forzado %d\n", imx179_forced_mode);
+}
+
+static ssize_t imx179_mode_store(struct device *dev,
+	struct device_attribute *attr, const char *buf, size_t count)
+{
+	int mode = imx179_mode_from_text(buf);
+
+	if (mode == -EINVAL) {
+		pr_err("imx179 mocha K-78: valor no valido (usa auto, 3280x2460, 1920x1080 o 1280x720)\n");
+		return -EINVAL;
+	}
+	imx179_forced_mode = mode;
+	pr_info("imx179 mocha K-78: perilla imx179_mode = %s\n",
+		mode < 0 ? "auto" : "forzado");
+	return count;
+}
+static DEVICE_ATTR(imx179_mode, S_IRUGO | S_IWUSR,
+	imx179_mode_show, imx179_mode_store);
+
+
 static inline void
 msleep_range(unsigned int delay_base)
 {
@@ -431,6 +519,25 @@ imx179_set_mode(struct imx179_info *info, struct imx179_mode *mode)
 	pr_info("%s: xres %u yres %u framelength %u coarsetime %u gain %u\n",
 			 __func__, mode->xres, mode->yres, mode->frame_length,
 			 mode->coarse_time, mode->gain);
+
+	/* K-78: si la perilla esta forzada, se reescribe la talla pedida ANTES de elegir tabla.
+	 * frame_length / coarse_time / gain siguen viniendo del PCL y se escriben despues, asi que
+	 * la exposicion y la ganancia automaticas no se pierden. */
+	if (imx179_forced_mode >= 0) {
+		int i;
+
+		for (i = 0; i < ARRAY_SIZE(imx179_size_map); i++) {
+			if (imx179_size_map[i].idx == imx179_forced_mode) {
+				pr_info("imx179 mocha K-78: pedida %ux%u -> forzada %ux%u\n",
+					(unsigned)mode->xres, (unsigned)mode->yres,
+					(unsigned)imx179_size_map[i].xres,
+					(unsigned)imx179_size_map[i].yres);
+				mode->xres = imx179_size_map[i].xres;
+				mode->yres = imx179_size_map[i].yres;
+				break;
+			}
+		}
+	}
 
 	if (mode->xres == 3280 && mode->yres == 2460) {
 		sensor_mode = IMX179_MODE_3280X2460;
@@ -1182,6 +1289,13 @@ imx179_probe(struct i2c_client *client,
 
 	mutex_init(&info->imx179_camera_lock);
 
+	/* K-78: perilla del modo. Si no se puede crear, no pasa nada: el driver sigue en 'auto'. */
+	if (device_create_file(&client->dev, &dev_attr_imx179_mode))
+		pr_warn("imx179 mocha K-78: no se pudo crear la perilla imx179_mode\n");
+	else
+		pr_info("imx179 mocha K-78: perilla en /sys/bus/i2c/devices/%s/imx179_mode (auto)\n",
+			dev_name(&client->dev));
+
 	pr_err("[IMX179]: end of probing sensor.\n");
 	return 0;
 
@@ -1198,6 +1312,7 @@ imx179_remove(struct i2c_client *client)
 	info = i2c_get_clientdata(client);
 	sysedp_free_consumer(info->sysedpc);
 	misc_deregister(&imx179_device);
+	device_remove_file(&client->dev, &dev_attr_imx179_mode);
 	mutex_destroy(&info->imx179_camera_lock);
 
 	imx179_power_put(&info->power);
