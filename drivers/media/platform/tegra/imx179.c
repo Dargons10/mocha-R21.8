@@ -1088,6 +1088,23 @@ imx179_open(struct inode *inode, struct file *file)
 	struct miscdevice	*miscdev = file->private_data;
 	struct imx179_info *info;
 
+	/* K-79: la perilla K-78 es de diagnostico.  Al abrir la camara se vuelve siempre a 'auto'.
+	 *
+	 * Por que (medido 2026-11-22): se forzo 1280x720 para un banco, la prueba acabo, y el sensor
+	 * se QUEDO en el modo 2 (720p).  A partir de ahi, cada apertura de camara fallaba asi:
+	 *   Camera3-Device: Camera 0: initialize: Could not open camera session: Invalid argument (-22)
+	 *   CameraService:  connectHelper: Could not initialize client from HAL
+	 *   FATAL EXCEPTION: Illegal argument to HAL module for camera "0"
+	 * y la app de camara petaba hasta que se reinicio la tablet.  La HAL valida la sesion contra
+	 * las metadatos estaticas (que anuncian 3280x2460), y un sensor dejado en otro modo es -EINVAL.
+	 *
+	 * Con esto, un experimento forzado solo afecta a la sesion en la que se escribe la perilla y
+	 * la siguiente apertura ya pide el modo al PCL: no puede quedar veneno entre sesiones. */
+	if (imx179_forced_mode >= 0) {
+		pr_info("imx179 mocha K-79: la perilla estaba forzada; se devuelve a auto en esta apertura\n");
+		imx179_forced_mode = -1;
+	}
+
 	info = container_of(miscdev, struct imx179_info, miscdev_info);
 	/* check if the device is in use */
 	if (atomic_xchg(&info->in_use, 1)) {
